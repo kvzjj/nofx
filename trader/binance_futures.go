@@ -62,12 +62,24 @@ type FuturesTrader struct {
 }
 
 // NewFuturesTrader 创建合约交易器
-func NewFuturesTrader(apiKey, secretKey string, userId string) *FuturesTrader {
+func NewFuturesTrader(apiKey, secretKey string, userId string, testnet ...bool) *FuturesTrader {
 	client := futures.NewClient(apiKey, secretKey)
+
+	// 如果指定了 testnet 参数且为 true，使用测试网 URL
+	useTestnet := false
+	if len(testnet) > 0 && testnet[0] {
+		useTestnet = true
+		client.BaseURL = "https://testnet.binancefuture.com"
+		log.Printf("🔧 使用币安测试网: %s", client.BaseURL)
+	}
 
 	hookRes := hook.HookExec[hook.NewBinanceTraderResult](hook.NEW_BINANCE_TRADER, userId, client)
 	if hookRes != nil && hookRes.GetResult() != nil {
 		client = hookRes.GetResult()
+		// Hook 可能修改了 client，如果使用测试网，需要重新设置 BaseURL
+		if useTestnet {
+			client.BaseURL = "https://testnet.binancefuture.com"
+		}
 	}
 
 	// 同步时间，避免 Timestamp ahead 错误

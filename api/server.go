@@ -75,6 +75,46 @@ func corsMiddleware() gin.HandlerFunc {
 	}
 }
 
+// formatExchangeError 统一格式化交易所连接错误，提供友好的错误提示
+func formatExchangeError(err error, exchangeID string, isTestnet bool) string {
+	if err == nil {
+		return ""
+	}
+
+	errMsg := err.Error()
+
+	// 检测测试网相关错误
+	if isTestnet {
+		// 网络连接错误
+		if strings.Contains(errMsg, "connection refused") ||
+			strings.Contains(errMsg, "timeout") ||
+			strings.Contains(errMsg, "no such host") ||
+			strings.Contains(errMsg, "network is unreachable") {
+			return fmt.Sprintf("测试网连接失败：无法连接到 %s 测试网服务器。请检查网络连接或稍后重试。", exchangeID)
+		}
+
+		// API 认证错误（测试网可能需要不同的 API Key）
+		if strings.Contains(errMsg, "invalid signature") ||
+			strings.Contains(errMsg, "API-key format invalid") ||
+			strings.Contains(errMsg, "Invalid API-key") ||
+			strings.Contains(errMsg, "401") {
+			return fmt.Sprintf("测试网认证失败：请确保使用的是 %s 测试网的 API Key 和 Secret Key。测试网和主网的 API Key 是不同的。", exchangeID)
+		}
+
+		// 其他测试网相关错误
+		return fmt.Sprintf("测试网连接失败：%v。请确认已正确配置 %s 测试网的 API 密钥。", err, exchangeID)
+	}
+
+	// 主网错误（保持原有格式，但更友好）
+	if strings.Contains(errMsg, "connection refused") ||
+		strings.Contains(errMsg, "timeout") ||
+		strings.Contains(errMsg, "no such host") {
+		return fmt.Sprintf("连接失败：无法连接到 %s 服务器。请检查网络连接。", exchangeID)
+	}
+
+	return fmt.Sprintf("连接 %s 失败: %v", exchangeID, err)
+}
+
 // setupRoutes 设置路由
 func (s *Server) setupRoutes() {
 	// API路由组
@@ -557,7 +597,7 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 
 		switch req.ExchangeID {
 		case "binance":
-			tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey, userID)
+			tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey, userID, exchangeCfg.Testnet)
 		case "hyperliquid":
 			tempTrader, createErr = trader.NewHyperliquidTrader(
 				exchangeCfg.APIKey, // private key
@@ -926,7 +966,7 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 
 	switch traderConfig.ExchangeID {
 	case "binance":
-		tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey, userID)
+		tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey, userID, exchangeCfg.Testnet)
 	case "hyperliquid":
 		tempTrader, createErr = trader.NewHyperliquidTrader(
 			exchangeCfg.APIKey,
@@ -946,7 +986,8 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 
 	if createErr != nil {
 		log.Printf("⚠️ 创建临时 trader 失败: %v", createErr)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("连接交易所失败: %v", createErr)})
+		errorMsg := formatExchangeError(createErr, traderConfig.ExchangeID, exchangeCfg.Testnet)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errorMsg})
 		return
 	}
 
@@ -954,7 +995,8 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	balanceInfo, balanceErr := tempTrader.GetBalance()
 	if balanceErr != nil {
 		log.Printf("⚠️ 查询交易所余额失败: %v", balanceErr)
-		c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("查询余额失败: %v", balanceErr)})
+		errorMsg := formatExchangeError(balanceErr, traderConfig.ExchangeID, exchangeCfg.Testnet)
+		c.JSON(http.StatusInternalServerError, gin.H{"error": errorMsg})
 		return
 	}
 
