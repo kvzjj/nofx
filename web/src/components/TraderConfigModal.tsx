@@ -24,6 +24,7 @@ interface TraderConfigData {
   use_coin_pool: boolean
   use_oi_top: boolean
   initial_balance: number
+  equity_base?: number
   scan_interval_minutes: number
 }
 
