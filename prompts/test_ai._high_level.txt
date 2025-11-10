@@ -236,7 +236,7 @@ position_size_usd = $160 × 5 = $800 ← JSON填此值
 
 ##末尾结果输出
 ## **注意** 1.先输出思维链，再输出json
-           2.decision数组的对象需要输出多个 如 BTCUSDT,ETHUSDT,BNBUSDT,XRPUSDT,DOGEUSDT,SOL
+           2.decision数组的对象当状态为wait时候可以省略不输出
            3.action 为wait或者hold时，非必要字段可以隐藏不填
 输出json模板
 ``` json结果

@@ -24,6 +24,64 @@ export function CompetitionPage() {
     }
   )
 
+  // 基于历史数据独立计算每个AI的初始余额与当前收益率，并用于过滤无效（已删除）的AI
+  const { data: historiesBatch } = useSWR(
+    competition && competition.traders && competition.traders.length > 0
+      ? `equity-history-batch-${competition.traders.map((t) => t.trader_id).sort().join(',')}`
+      : null,
+    async () => {
+      const ids = competition!.traders.map((t) => t.trader_id)
+      return api.getEquityHistoryBatch(ids)
+    },
+    {
+      refreshInterval: 30000,
+      revalidateOnFocus: false,
+      dedupingInterval: 20000,
+    }
+  )
+
+  const derivedById: Record<
+    string,
+    { initialBalance: number; currentEquity: number; pnlPct: number } | undefined
+  > = {}
+  if (historiesBatch?.histories) {
+    for (const traderId of Object.keys(historiesBatch.histories)) {
+      const history = historiesBatch.histories[traderId] as any[]
+      if (Array.isArray(history) && history.length > 0) {
+        const first = history[0]
+        const last = history[history.length - 1]
+        const initialBalance =
+          (first?.balance ?? (first?.total_equity - (first?.total_pnl ?? 0))) || 0
+        const currentEquity = last?.total_equity ?? 0
+        const pnlPct =
+          initialBalance > 0
+            ? ((currentEquity - initialBalance) / initialBalance) * 100
+            : 0
+        derivedById[traderId] = { initialBalance, currentEquity, pnlPct }
+      } else {
+        derivedById[traderId] = undefined
+      }
+    }
+  }
+
+  // 过滤掉没有历史数据的AI（通常为已删除）
+  const visibleTraders = competition?.traders
+    ? competition.traders.filter((t) => {
+        // 停止的模型不显示
+        if (!t.is_running) return false
+        if (!historiesBatch?.histories) return true
+        const h = historiesBatch.histories[t.trader_id]
+        return Array.isArray(h) && h.length > 0
+      })
+    : []
+
+  // 使用“独立基准”的收益率进行排序；无派生时回退后端字段
+  const sortedTraders = [...visibleTraders].sort((a, b) => {
+    const da = derivedById[a.trader_id]?.pnlPct ?? a.total_pnl_pct ?? 0
+    const db = derivedById[b.trader_id]?.pnlPct ?? b.total_pnl_pct ?? 0
+    return db - da
+  })
+
   const handleTraderClick = async (traderId: string) => {
     try {
       const traderConfig = await api.getTraderConfig(traderId)
@@ -123,10 +181,7 @@ export function CompetitionPage() {
     )
   }
 
-  // 按收益率排序
-  const sortedTraders = [...competition.traders].sort(
-    (a, b) => b.total_pnl_pct - a.total_pnl_pct
-  )
+  // 按收益率排序（已在上方基于独立基准计算得到sortedTraders）
 
   // 找出领先者
   const leader = sortedTraders[0]
@@ -161,7 +216,7 @@ export function CompetitionPage() {
                   color: '#F0B90B',
                 }}
               >
-                {competition.count} {t('traders', language)}
+                {visibleTraders.length} {t('traders', language)}
               </span>
             </h1>
             <p className="text-xs" style={{ color: '#848E9C' }}>
@@ -182,11 +237,17 @@ export function CompetitionPage() {
           <div
             className="text-sm font-semibold"
             style={{
-              color: (leader?.total_pnl ?? 0) >= 0 ? '#0ECB81' : '#F6465D',
+              color:
+                (derivedById[leader?.trader_id || '']?.pnlPct ?? leader?.total_pnl ?? 0) >= 0
+                  ? '#0ECB81'
+                  : '#F6465D',
             }}
           >
-            {(leader?.total_pnl ?? 0) >= 0 ? '+' : ''}
-            {leader?.total_pnl_pct?.toFixed(2) || '0.00'}%
+            {(derivedById[leader?.trader_id || '']?.pnlPct ?? 0) >= 0 ? '+' : ''}
+            {(
+              derivedById[leader?.trader_id || '']?.pnlPct ?? leader?.total_pnl_pct ?? 0
+            ).toFixed(2)}
+            %
           </div>
         </div>
       </div>
@@ -242,6 +303,10 @@ export function CompetitionPage() {
                 sortedTraders,
                 trader.trader_id
               )
+              const derived = derivedById[trader.trader_id]
+              const displayPct =
+                derived?.pnlPct ?? trader.total_pnl_pct ?? 0
+              const isProfit = displayPct >= 0
 
               return (
                 <div
@@ -302,7 +367,7 @@ export function CompetitionPage() {
                           className="text-xs md:text-sm font-bold mono"
                           style={{ color: '#EAECEF' }}
                         >
-                          {trader.total_equity?.toFixed(2) || '0.00'}
+                          {(derived?.currentEquity ?? trader.total_equity ?? 0).toFixed(2)}
                         </div>
                       </div>
 
@@ -314,21 +379,18 @@ export function CompetitionPage() {
                         <div
                           className="text-base md:text-lg font-bold mono"
                           style={{
-                            color:
-                              (trader.total_pnl ?? 0) >= 0
-                                ? '#0ECB81'
-                                : '#F6465D',
+                            color: isProfit ? '#0ECB81' : '#F6465D',
                           }}
                         >
-                          {(trader.total_pnl ?? 0) >= 0 ? '+' : ''}
-                          {trader.total_pnl_pct?.toFixed(2) || '0.00'}%
+                          {isProfit ? '+' : ''}
+                          {displayPct.toFixed(2)}%
                         </div>
                         <div
                           className="text-xs mono"
                           style={{ color: '#848E9C' }}
                         >
-                          {(trader.total_pnl ?? 0) >= 0 ? '+' : ''}
-                          {trader.total_pnl?.toFixed(2) || '0.00'}
+                          {isProfit ? '+' : ''}
+                          {(trader.total_pnl ?? 0).toFixed(2)}
                         </div>
                       </div>
 
@@ -377,7 +439,7 @@ export function CompetitionPage() {
       </div>
 
       {/* Head-to-Head Stats */}
-      {competition.traders.length === 2 && (
+      {sortedTraders.length === 2 && (
         <div
           className="binance-card p-5 animate-slide-in"
           style={{ animationDelay: '0.3s' }}
@@ -392,7 +454,11 @@ export function CompetitionPage() {
             {sortedTraders.map((trader, index) => {
               const isWinning = index === 0
               const opponent = sortedTraders[1 - index]
-              const gap = trader.total_pnl_pct - opponent.total_pnl_pct
+                const traderPct =
+                  derivedById[trader.trader_id]?.pnlPct ?? trader.total_pnl_pct ?? 0
+                const opponentPct =
+                  derivedById[opponent.trader_id]?.pnlPct ?? opponent.total_pnl_pct ?? 0
+                const gap = traderPct - opponentPct
 
               return (
                 <div
@@ -425,12 +491,11 @@ export function CompetitionPage() {
                     <div
                       className="text-lg md:text-2xl font-bold mono mb-1"
                       style={{
-                        color:
-                          (trader.total_pnl ?? 0) >= 0 ? '#0ECB81' : '#F6465D',
+                          color: traderPct >= 0 ? '#0ECB81' : '#F6465D',
                       }}
                     >
-                      {(trader.total_pnl ?? 0) >= 0 ? '+' : ''}
-                      {trader.total_pnl_pct?.toFixed(2) || '0.00'}%
+                        {traderPct >= 0 ? '+' : ''}
+                        {traderPct.toFixed(2)}%
                     </div>
                     {isWinning && gap > 0 && (
                       <div

@@ -85,6 +85,13 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
         `Trader ${trader.trader_id}: ${history.data.length} data points`
       )
 
+      // 为该交易员确定独立初始余额（使用首个数据点）
+      const firstPoint = history.data[0]
+      const traderInitialBalance =
+        firstPoint
+          ? firstPoint.balance ?? (firstPoint.total_equity - (firstPoint.total_pnl ?? 0))
+          : 0
+
       history.data.forEach((point: any) => {
         const ts = point.timestamp
 
@@ -100,11 +107,11 @@ export function ComparisonChart({ traders }: ComparisonChartProps) {
           })
         }
 
-        // 计算盈亏百分比：从total_pnl和balance计算
-        // 假设初始余额 = balance - total_pnl
-        const initialBalance = point.balance - point.total_pnl
+        // 使用每个AI独立的初始余额（来自该AI的首个数据点）
         const pnlPct =
-          initialBalance > 0 ? (point.total_pnl / initialBalance) * 100 : 0
+          traderInitialBalance > 0
+            ? ((point.total_equity - traderInitialBalance) / traderInitialBalance) * 100
+            : 0
 
         timestampMap.get(ts)!.traders.set(trader.trader_id, {
           pnl_pct: pnlPct,
