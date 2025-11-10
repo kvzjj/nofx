@@ -20,7 +20,7 @@ import (
 	"github.com/joho/godotenv"
 )
 
-// ConfigFile 配置文件结构，只包含需要同步到数据库的字段
+// ConfigFile 配置文件结构，只包含需要同步到数据库的字段。
 // TODO 现在与config.Config相同，未来会被替换， 现在为了兼容性不得不保留当前文件
 type ConfigFile struct {
 	BetaMode           bool                  `json:"beta_mode"`
