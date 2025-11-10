@@ -255,6 +255,8 @@ export function TraderConfigModal({
       onClose()
     } catch (error) {
       console.error('保存失败:', error)
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      alert('保存失败: ' + (errorMessage || '未知错误，请重试'))
     } finally {
       setIsSaving(false)
     }

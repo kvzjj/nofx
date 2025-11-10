@@ -500,7 +500,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       setEditingModel(null)
     } catch (error) {
       console.error('Failed to save model config:', error)
-      alert(t('saveConfigFailed', language))
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      alert(t('saveConfigFailed', language) + (errorMessage ? `\n错误详情: ${errorMessage}` : ''))
     }
   }
 
@@ -640,7 +641,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
       setEditingExchange(null)
     } catch (error) {
       console.error('Failed to save exchange config:', error)
-      alert(t('saveConfigFailed', language))
+      const errorMessage = error instanceof Error ? error.message : String(error)
+      alert(t('saveConfigFailed', language) + (errorMessage ? `\n错误详情: ${errorMessage}` : ''))
     }
   }
 
@@ -1803,39 +1805,44 @@ function ExchangeConfigModal({
     e.preventDefault()
     if (!selectedExchangeId) return
 
-    // 根据交易所类型验证不同字段
-    if (selectedExchange?.id === 'binance') {
-      if (!apiKey.trim() || !secretKey.trim()) return
-      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet)
-    } else if (selectedExchange?.id === 'hyperliquid') {
-      if (!apiKey.trim() || !hyperliquidWalletAddr.trim()) return // 验证私钥和钱包地址
-      await onSave(
-        selectedExchangeId,
-        apiKey.trim(),
-        '',
-        testnet,
-        hyperliquidWalletAddr.trim()
-      )
-    } else if (selectedExchange?.id === 'aster') {
-      if (!asterUser.trim() || !asterSigner.trim() || !asterPrivateKey.trim())
-        return
-      await onSave(
-        selectedExchangeId,
-        '',
-        '',
-        testnet,
-        undefined,
-        asterUser.trim(),
-        asterSigner.trim(),
-        asterPrivateKey.trim()
-      )
-    } else if (selectedExchange?.id === 'okx') {
-      if (!apiKey.trim() || !secretKey.trim() || !passphrase.trim()) return
-      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet)
-    } else {
-      // 默认情况（其他CEX交易所）
-      if (!apiKey.trim() || !secretKey.trim()) return
-      await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet)
+    try {
+      // 根据交易所类型验证不同字段
+      if (selectedExchange?.id === 'binance') {
+        if (!apiKey.trim() || !secretKey.trim()) return
+        await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet)
+      } else if (selectedExchange?.id === 'hyperliquid') {
+        if (!apiKey.trim() || !hyperliquidWalletAddr.trim()) return // 验证私钥和钱包地址
+        await onSave(
+          selectedExchangeId,
+          apiKey.trim(),
+          '',
+          testnet,
+          hyperliquidWalletAddr.trim()
+        )
+      } else if (selectedExchange?.id === 'aster') {
+        if (!asterUser.trim() || !asterSigner.trim() || !asterPrivateKey.trim())
+          return
+        await onSave(
+          selectedExchangeId,
+          '',
+          '',
+          testnet,
+          undefined,
+          asterUser.trim(),
+          asterSigner.trim(),
+          asterPrivateKey.trim()
+        )
+      } else if (selectedExchange?.id === 'okx') {
+        if (!apiKey.trim() || !secretKey.trim() || !passphrase.trim()) return
+        await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet)
+      } else {
+        // 默认情况（其他CEX交易所）
+        if (!apiKey.trim() || !secretKey.trim()) return
+        await onSave(selectedExchangeId, apiKey.trim(), secretKey.trim(), testnet)
+      }
+    } catch (error) {
+      // 错误已经在 onSave 中处理，这里不需要再次处理
+      console.error('Exchange config save error:', error)
     }
   }
 
