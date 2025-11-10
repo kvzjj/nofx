@@ -419,6 +419,7 @@ type CreateTraderRequest struct {
 	AIModelID            string  `json:"ai_model_id" binding:"required"`
 	ExchangeID           string  `json:"exchange_id" binding:"required"`
 	InitialBalance       float64 `json:"initial_balance"`
+	EquityBase           float64 `json:"equity_base"` // 每个交易员可用资金基准，0表示使用账户实际净值
 	ScanIntervalMinutes  int     `json:"scan_interval_minutes"`
 	BTCETHLeverage       int     `json:"btc_eth_leverage"`
 	AltcoinLeverage      int     `json:"altcoin_leverage"`
@@ -645,6 +646,7 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		AIModelID:            req.AIModelID,
 		ExchangeID:           req.ExchangeID,
 		InitialBalance:       actualBalance, // 使用实际查询的余额
+		EquityBase:           req.EquityBase,
 		BTCETHLeverage:       btcEthLeverage,
 		AltcoinLeverage:      altcoinLeverage,
 		TradingSymbols:       req.TradingSymbols,
@@ -688,6 +690,7 @@ type UpdateTraderRequest struct {
 	AIModelID           string   `json:"ai_model_id" binding:"required"`
 	ExchangeID          string   `json:"exchange_id" binding:"required"`
 	InitialBalance      *float64 `json:"initial_balance"` // 指针类型，nil表示未提供，非nil表示要更新（包括0）
+	EquityBase          *float64 `json:"equity_base"`     // 指针类型，nil表示未提供
 	ScanIntervalMinutes int      `json:"scan_interval_minutes"`
 	BTCETHLeverage      int      `json:"btc_eth_leverage"`
 	AltcoinLeverage     int      `json:"altcoin_leverage"`
@@ -759,6 +762,12 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		initialBalance = *req.InitialBalance
 		log.Printf("✓ 用户更新交易员 %s 的初始余额: %.2f → %.2f USDT（这将影响收益计算基准）", traderID, existingTrader.InitialBalance, initialBalance)
 	}
+	// 允许更新 equity_base
+	equityBase := existingTrader.EquityBase
+	if req.EquityBase != nil {
+		equityBase = *req.EquityBase
+		log.Printf("✓ 用户更新交易员 %s 的资金基准 equity_base: %.2f → %.2f USDT（用于仓位与风控计算）", traderID, existingTrader.EquityBase, equityBase)
+	}
 
 	// 更新交易员配置
 	trader := &config.TraderRecord{
@@ -768,6 +777,7 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		AIModelID:            req.AIModelID,
 		ExchangeID:           req.ExchangeID,
 		InitialBalance:       initialBalance, // 使用保护后的值
+		EquityBase:           equityBase,
 		BTCETHLeverage:       btcEthLeverage,
 		AltcoinLeverage:      altcoinLeverage,
 		TradingSymbols:       req.TradingSymbols,

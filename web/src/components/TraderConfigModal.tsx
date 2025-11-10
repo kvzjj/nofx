@@ -61,6 +61,7 @@ export function TraderConfigModal({
     use_coin_pool: false,
     use_oi_top: false,
     initial_balance: 1000,
+    equity_base: 0,
     scan_interval_minutes: 3,
   })
   const [isSaving, setIsSaving] = useState(false)
@@ -97,6 +98,7 @@ export function TraderConfigModal({
         use_coin_pool: false,
         use_oi_top: false,
         initial_balance: 1000,
+        equity_base: 0,
         scan_interval_minutes: 3,
       })
     }
@@ -235,6 +237,7 @@ export function TraderConfigModal({
         name: formData.trader_name,
         ai_model_id: formData.ai_model,
         exchange_id: formData.exchange_id,
+        equity_base: formData.equity_base,
         btc_eth_leverage: formData.btc_eth_leverage,
         altcoin_leverage: formData.altcoin_leverage,
         trading_symbols: formData.trading_symbols,
@@ -450,6 +453,28 @@ export function TraderConfigModal({
                       {balanceFetchError}
                     </p>
                   )}
+                </div>
+              </div>
+
+              {/* 资金基准 */}
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="text-sm text-[#EAECEF] block mb-2">
+                    可用资金基准 ($)
+                  </label>
+                  <input
+                    type="number"
+                    value={formData.equity_base ?? 0}
+                    onChange={(e) =>
+                      handleInputChange('equity_base', Number(e.target.value))
+                    }
+                    className="w-full px-3 py-2 bg-[#0B0E11] border border-[#2B3139] rounded text-[#EAECEF] focus:border-[#F0B90B] focus:outline-none"
+                    min="0"
+                    step="0.01"
+                  />
+                  <p className="text-xs text-[#848E9C] mt-1">
+                    0 表示使用账户实际净值。设置后用于仓位、风控、展示的基准计算。
+                  </p>
                 </div>
               </div>
 

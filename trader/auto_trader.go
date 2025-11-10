@@ -22,6 +22,9 @@ type AutoTraderConfig struct {
 	Name    string // Trader显示名称
 	AIModel string // AI模型: "qwen" 或 "deepseek"
 
+	// 资金基准（用于仓位和风控计算）。0 表示使用账户实际净值
+	EquityBase float64
+
 	// 交易平台选择
 	Exchange string // "binance", "hyperliquid" 或 "aster"
 
@@ -85,6 +88,7 @@ type AutoTrader struct {
 	aiModel               string // AI模型名称
 	exchange              string // 交易平台名称
 	config                AutoTraderConfig
+	equityBase            float64
 	trader                Trader // 使用Trader接口（支持多平台）
 	mcpClient             *mcp.Client
 	decisionLogger        *logger.DecisionLogger // 决策日志记录器
@@ -215,6 +219,7 @@ func NewAutoTrader(config AutoTraderConfig, database interface{}, userID string)
 		aiModel:               config.AIModel,
 		exchange:              config.Exchange,
 		config:                config,
+		equityBase:            config.EquityBase,
 		trader:                trader,
 		mcpClient:             mcpClient,
 		decisionLogger:        decisionLogger,
@@ -552,6 +557,11 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 	// Total Equity = 钱包余额 + 未实现盈亏
 	totalEquity := totalWalletBalance + totalUnrealizedProfit
+	// 使用配置的资金基准（若>0）作为AI与风控的计算基准
+	effectiveEquity := totalEquity
+	if at.equityBase > 0 {
+		effectiveEquity = at.equityBase
+	}
 
 	// 2. 获取持仓信息
 	positions, err := at.trader.GetPositions()
@@ -645,8 +655,8 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	}
 
 	marginUsedPct := 0.0
-	if totalEquity > 0 {
-		marginUsedPct = (totalMarginUsed / totalEquity) * 100
+	if effectiveEquity > 0 {
+		marginUsedPct = (totalMarginUsed / effectiveEquity) * 100
 	}
 
 	// 5. 分析历史表现（最近100个周期，避免长期持仓的交易记录丢失）
@@ -666,7 +676,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		BTCETHLeverage:  at.config.BTCETHLeverage,  // 使用配置的杠杆倍数
 		AltcoinLeverage: at.config.AltcoinLeverage, // 使用配置的杠杆倍数
 		Account: decision.AccountInfo{
-			TotalEquity:      totalEquity,
+			TotalEquity:      effectiveEquity,
 			AvailableBalance: availableBalance,
 			TotalPnL:         totalPnL,
 			TotalPnLPct:      totalPnLPct,
@@ -1283,17 +1293,25 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		totalPnLPct = (totalPnL / at.initialBalance) * 100
 	}
 
+	// 使用配置的资金基准（若>0）作为展示与风控的计算基准
+	effectiveEquity := totalEquity
+	if at.equityBase > 0 {
+		effectiveEquity = at.equityBase
+	}
+
 	marginUsedPct := 0.0
-	if totalEquity > 0 {
-		marginUsedPct = (totalMarginUsed / totalEquity) * 100
+	if effectiveEquity > 0 {
+		marginUsedPct = (totalMarginUsed / effectiveEquity) * 100
 	}
 
 	return map[string]interface{}{
-		// 核心字段
-		"total_equity":      totalEquity,           // 账户净值 = wallet + unrealized
-		"wallet_balance":    totalWalletBalance,    // 钱包余额（不含未实现盈亏）
-		"unrealized_profit": totalUnrealizedProfit, // 未实现盈亏（从API）
-		"available_balance": availableBalance,      // 可用余额
+		// 核心字段（total_equity 使用资金基准，便于前端作为计算分母）
+		"total_equity":        effectiveEquity,       // 基准净值（用于计算与展示）
+		"wallet_balance":      totalWalletBalance,    // 钱包余额（不含未实现盈亏）
+		"unrealized_profit":   totalUnrealizedProfit, // 未实现盈亏（从API）
+		"available_balance":   availableBalance,      // 可用余额
+		"equity_base":         at.equityBase,         // 配置的资金基准（0 表示使用账户实际净值）
+		"actual_total_equity": totalEquity,           // 实际净值（钱包+未实现）
 
 		// 盈亏统计
 		"total_pnl":            totalPnL,           // 总盈亏 = equity - initial

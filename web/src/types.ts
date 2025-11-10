@@ -15,6 +15,8 @@ export interface SystemStatus {
 
 export interface AccountInfo {
   total_equity: number
+  equity_base?: number
+  actual_total_equity?: number
   wallet_balance: number
   unrealized_profit: number
   available_balance: number
@@ -127,6 +129,7 @@ export interface CreateTraderRequest {
   ai_model_id: string
   exchange_id: string
   initial_balance: number
+  equity_base?: number
   scan_interval_minutes?: number
   btc_eth_leverage?: number
   altcoin_leverage?: number
@@ -201,6 +204,7 @@ export interface TraderConfigData {
   use_coin_pool: boolean
   use_oi_top: boolean
   initial_balance: number
+  equity_base?: number
   scan_interval_minutes: number
   is_running: boolean
 }

@@ -271,6 +271,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         ai_model_id: data.ai_model_id,
         exchange_id: data.exchange_id,
         initial_balance: data.initial_balance,
+        equity_base: data.equity_base,
         scan_interval_minutes: data.scan_interval_minutes,
         btc_eth_leverage: data.btc_eth_leverage,
         altcoin_leverage: data.altcoin_leverage,
