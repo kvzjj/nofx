@@ -228,17 +228,18 @@ func calculateATR(klines []Kline, period int) float64 {
 
 // calculateIntradaySeries 计算日内系列数据
 func calculateIntradaySeries(klines []Kline) *IntradayData {
+	const dataPoints = 50 // 增加到50个数据点（约2.5小时）
 	data := &IntradayData{
-		MidPrices:   make([]float64, 0, 10),
-		EMA20Values: make([]float64, 0, 10),
-		MACDValues:  make([]float64, 0, 10),
-		RSI7Values:  make([]float64, 0, 10),
-		RSI14Values: make([]float64, 0, 10),
-		Volume:      make([]float64, 0, 10),
+		MidPrices:   make([]float64, 0, dataPoints),
+		EMA20Values: make([]float64, 0, dataPoints),
+		MACDValues:  make([]float64, 0, dataPoints),
+		RSI7Values:  make([]float64, 0, dataPoints),
+		RSI14Values: make([]float64, 0, dataPoints),
+		Volume:      make([]float64, 0, dataPoints),
 	}
 
-	// 获取最近10个数据点
-	start := len(klines) - 10
+	// 获取最近50个数据点
+	start := len(klines) - dataPoints
 	if start < 0 {
 		start = 0
 	}
@@ -278,9 +279,10 @@ func calculateIntradaySeries(klines []Kline) *IntradayData {
 
 // calculateLongerTermData 计算长期数据
 func calculateLongerTermData(klines []Kline) *LongerTermData {
+	const dataPoints = 30 // 增加到30个数据点（约5天）
 	data := &LongerTermData{
-		MACDValues:  make([]float64, 0, 10),
-		RSI14Values: make([]float64, 0, 10),
+		MACDValues:  make([]float64, 0, dataPoints),
+		RSI14Values: make([]float64, 0, dataPoints),
 	}
 
 	// 计算EMA
@@ -303,7 +305,7 @@ func calculateLongerTermData(klines []Kline) *LongerTermData {
 	}
 
 	// 计算MACD和RSI序列
-	start := len(klines) - 10
+	start := len(klines) - dataPoints
 	if start < 0 {
 		start = 0
 	}
