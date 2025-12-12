@@ -21,15 +21,10 @@ interface UseTraderActionsParams {
   mutateTraders: () => Promise<any>
   setAllModels: (models: AIModel[]) => void
   setAllExchanges: (exchanges: Exchange[]) => void
-  setUserSignalSource: (config: {
-    coinPoolUrl: string
-    oiTopUrl: string
-  }) => void
   setShowCreateModal: (show: boolean) => void
   setShowEditModal: (show: boolean) => void
   setShowModelModal: (show: boolean) => void
   setShowExchangeModal: (show: boolean) => void
-  setShowSignalSourceModal: (show: boolean) => void
   setEditingModel: (modelId: string | null) => void
   setEditingExchange: (exchangeId: string | null) => void
   editingTrader: TraderConfigData | null
@@ -46,12 +41,10 @@ export function useTraderActions({
   mutateTraders,
   setAllModels,
   setAllExchanges,
-  setUserSignalSource,
   setShowCreateModal,
   setShowEditModal,
   setShowModelModal,
   setShowExchangeModal,
-  setShowSignalSourceModal,
   setEditingModel,
   setEditingExchange,
   editingTrader,
@@ -245,6 +238,23 @@ export function useTraderActions({
       await mutateTraders()
     } catch (error) {
       console.error('Failed to toggle trader:', error)
+      toast.error(t('operationFailed', language))
+    }
+  }
+
+  const handleToggleCompetition = async (traderId: string, currentShowInCompetition: boolean) => {
+    try {
+      const newValue = !currentShowInCompetition
+      await toast.promise(api.toggleCompetition(traderId, newValue), {
+        loading: '正在更新…',
+        success: newValue ? '已在竞技场显示' : '已在竞技场隐藏',
+        error: '更新失败',
+      })
+
+      // Immediately refresh traders list to update status
+      await mutateTraders()
+    } catch (error) {
+      console.error('Failed to toggle competition visibility:', error)
       toast.error(t('operationFailed', language))
     }
   }
@@ -452,6 +462,7 @@ export function useTraderActions({
         ...e,
         apiKey: '',
         secretKey: '',
+        passphrase: '', // OKX专用
         hyperliquidWalletAddr: '',
         asterUser: '',
         asterSigner: '',
@@ -466,6 +477,7 @@ export function useTraderActions({
               enabled: exchange.enabled,
               api_key: exchange.apiKey || '',
               secret_key: exchange.secretKey || '',
+              passphrase: exchange.passphrase || '', // OKX专用
               testnet: exchange.testnet || false,
               hyperliquid_wallet_addr: exchange.hyperliquidWalletAddr || '',
               aster_user: exchange.asterUser || '',
@@ -493,6 +505,7 @@ export function useTraderActions({
     exchangeId: string,
     apiKey: string,
     secretKey?: string,
+    passphrase?: string, // OKX专用
     testnet?: boolean,
     hyperliquidWalletAddr?: string,
     asterUser?: string,
@@ -525,6 +538,7 @@ export function useTraderActions({
                   ...e,
                   apiKey,
                   secretKey,
+                  passphrase, // OKX专用
                   testnet,
                   hyperliquidWalletAddr,
                   asterUser,
@@ -543,6 +557,7 @@ export function useTraderActions({
           ...exchangeToUpdate,
           apiKey,
           secretKey,
+          passphrase, // OKX专用
           testnet,
           hyperliquidWalletAddr,
           asterUser,
@@ -564,6 +579,7 @@ export function useTraderActions({
               enabled: exchange.enabled,
               api_key: exchange.apiKey || '',
               secret_key: exchange.secretKey || '',
+              passphrase: exchange.passphrase || '', // OKX专用
               testnet: exchange.testnet || false,
               hyperliquid_wallet_addr: exchange.hyperliquidWalletAddr || '',
               aster_user: exchange.asterUser || '',
@@ -605,24 +621,6 @@ export function useTraderActions({
     setShowExchangeModal(true)
   }
 
-  const handleSaveSignalSource = async (
-    coinPoolUrl: string,
-    oiTopUrl: string
-  ) => {
-    try {
-      await toast.promise(api.saveUserSignalSource(coinPoolUrl, oiTopUrl), {
-        loading: '正在保存…',
-        success: '保存成功',
-        error: '保存失败',
-      })
-      setUserSignalSource({ coinPoolUrl, oiTopUrl })
-      setShowSignalSourceModal(false)
-    } catch (error) {
-      console.error('Failed to save signal source:', error)
-      toast.error(t('saveSignalSourceFailed', language))
-    }
-  }
-
   return {
     // 辅助函数
     isModelInUse,
@@ -638,6 +636,7 @@ export function useTraderActions({
     handleSaveEditTrader,
     handleDeleteTrader,
     handleToggleTrader,
+    handleToggleCompetition,
     handleAddModel,
     handleAddExchange,
     handleModelClick,
@@ -646,6 +645,5 @@ export function useTraderActions({
     handleDeleteModel,
     handleSaveExchange,
     handleDeleteExchange,
-    handleSaveSignalSource,
   }
 }

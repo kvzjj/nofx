@@ -9,6 +9,7 @@ import type {
   AIModel,
   Exchange,
   CreateTraderRequest,
+  CreateExchangeRequest,
   UpdateModelConfigRequest,
   UpdateExchangeConfigRequest,
   CompetitionData,
@@ -19,6 +20,8 @@ import type {
   BacktestTradeEvent,
   BacktestMetrics,
   BacktestRunMetadata,
+  Strategy,
+  StrategyConfig,
 } from '../types'
 import { CryptoService } from './crypto'
 import { httpClient } from './httpClient'
@@ -100,6 +103,23 @@ export const api = {
     if (!result.success) throw new Error('停止交易员失败')
   },
 
+  async toggleCompetition(traderId: string, showInCompetition: boolean): Promise<void> {
+    const result = await httpClient.put(
+      `${API_BASE}/traders/${traderId}/competition`,
+      { show_in_competition: showInCompetition }
+    )
+    if (!result.success) throw new Error('更新竞技场显示设置失败')
+  },
+
+  async closePosition(traderId: string, symbol: string, side: string): Promise<{ message: string }> {
+    const result = await httpClient.post<{ message: string }>(
+      `${API_BASE}/traders/${traderId}/close-position`,
+      { symbol, side }
+    )
+    if (!result.success) throw new Error('平仓失败')
+    return result.data!
+  },
+
   async updateTraderPrompt(
     traderId: string,
     customPrompt: string
@@ -158,6 +178,16 @@ export const api = {
   },
 
   async updateModelConfigs(request: UpdateModelConfigRequest): Promise<void> {
+    // 检查是否启用了传输加密
+    const config = await CryptoService.fetchCryptoConfig()
+
+    if (!config.transport_encryption) {
+      // 传输加密禁用时，直接发送明文
+      const result = await httpClient.put(`${API_BASE}/models`, request)
+      if (!result.success) throw new Error('更新模型配置失败')
+      return
+    }
+
     // 获取RSA公钥
     const publicKey = await CryptoService.fetchPublicKey()
 
@@ -203,10 +233,71 @@ export const api = {
     if (!result.success) throw new Error('更新交易所配置失败')
   },
 
-  // 使用加密传输更新交易所配置
+  // 创建新的交易所账户
+  async createExchange(request: CreateExchangeRequest): Promise<{ id: string }> {
+    const result = await httpClient.post<{ id: string }>(`${API_BASE}/exchanges`, request)
+    if (!result.success) throw new Error('创建交易所账户失败')
+    return result.data!
+  },
+
+  // 创建新的交易所账户（加密传输）
+  async createExchangeEncrypted(request: CreateExchangeRequest): Promise<{ id: string }> {
+    // 检查是否启用了传输加密
+    const config = await CryptoService.fetchCryptoConfig()
+
+    if (!config.transport_encryption) {
+      // 传输加密禁用时，直接发送明文
+      const result = await httpClient.post<{ id: string }>(`${API_BASE}/exchanges`, request)
+      if (!result.success) throw new Error('创建交易所账户失败')
+      return result.data!
+    }
+
+    // 获取RSA公钥
+    const publicKey = await CryptoService.fetchPublicKey()
+
+    // 初始化加密服务
+    await CryptoService.initialize(publicKey)
+
+    // 获取用户信息
+    const userId = localStorage.getItem('user_id') || ''
+    const sessionId = sessionStorage.getItem('session_id') || ''
+
+    // 加密敏感数据
+    const encryptedPayload = await CryptoService.encryptSensitiveData(
+      JSON.stringify(request),
+      userId,
+      sessionId
+    )
+
+    // 发送加密数据
+    const result = await httpClient.post<{ id: string }>(
+      `${API_BASE}/exchanges`,
+      encryptedPayload
+    )
+    if (!result.success) throw new Error('创建交易所账户失败')
+    return result.data!
+  },
+
+  // 删除交易所账户
+  async deleteExchange(exchangeId: string): Promise<void> {
+    const result = await httpClient.delete(`${API_BASE}/exchanges/${exchangeId}`)
+    if (!result.success) throw new Error('删除交易所账户失败')
+  },
+
+  // 使用加密传输更新交易所配置（自动检测是否启用加密）
   async updateExchangeConfigsEncrypted(
     request: UpdateExchangeConfigRequest
   ): Promise<void> {
+    // 检查是否启用了传输加密
+    const config = await CryptoService.fetchCryptoConfig()
+
+    if (!config.transport_encryption) {
+      // 传输加密禁用时，直接发送明文
+      const result = await httpClient.put(`${API_BASE}/exchanges`, request)
+      if (!result.success) throw new Error('更新交易所配置失败')
+      return
+    }
+
     // 获取RSA公钥
     const publicKey = await CryptoService.fetchPublicKey()
 
@@ -337,16 +428,6 @@ export const api = {
     return result.data!
   },
 
-  // 获取AI学习表现分析（支持trader_id）
-  async getPerformance(traderId?: string): Promise<any> {
-    const url = traderId
-      ? `${API_BASE}/performance?trader_id=${traderId}`
-      : `${API_BASE}/performance`
-    const result = await httpClient.get<any>(url)
-    if (!result.success) throw new Error('获取AI学习数据失败')
-    return result.data!
-  },
-
   // 获取竞赛数据（无需认证）
   async getCompetition(): Promise<CompetitionData> {
     const result = await httpClient.get<CompetitionData>(
@@ -354,30 +435,6 @@ export const api = {
     )
     if (!result.success) throw new Error('获取竞赛数据失败')
     return result.data!
-  },
-
-  // 用户信号源配置接口
-  async getUserSignalSource(): Promise<{
-    coin_pool_url: string
-    oi_top_url: string
-  }> {
-    const result = await httpClient.get<{
-      coin_pool_url: string
-      oi_top_url: string
-    }>(`${API_BASE}/user/signal-sources`)
-    if (!result.success) throw new Error('获取用户信号源配置失败')
-    return result.data!
-  },
-
-  async saveUserSignalSource(
-    coinPoolUrl: string,
-    oiTopUrl: string
-  ): Promise<void> {
-    const result = await httpClient.post(`${API_BASE}/user/signal-sources`, {
-      coin_pool_url: coinPoolUrl,
-      oi_top_url: oiTopUrl,
-    })
-    if (!result.success) throw new Error('保存用户信号源配置失败')
   },
 
   // 获取服务器IP（需要认证，用于白名单配置）
@@ -562,5 +619,70 @@ export const api = {
       }
     }
     return res.blob()
+  },
+
+  // Strategy APIs
+  async getStrategies(): Promise<Strategy[]> {
+    const result = await httpClient.get<Strategy[]>(`${API_BASE}/strategies`)
+    if (!result.success) throw new Error('获取策略列表失败')
+    return result.data!
+  },
+
+  async getStrategy(strategyId: string): Promise<Strategy> {
+    const result = await httpClient.get<Strategy>(`${API_BASE}/strategies/${strategyId}`)
+    if (!result.success) throw new Error('获取策略失败')
+    return result.data!
+  },
+
+  async getActiveStrategy(): Promise<Strategy> {
+    const result = await httpClient.get<Strategy>(`${API_BASE}/strategies/active`)
+    if (!result.success) throw new Error('获取激活策略失败')
+    return result.data!
+  },
+
+  async getDefaultStrategyConfig(): Promise<StrategyConfig> {
+    const result = await httpClient.get<StrategyConfig>(`${API_BASE}/strategies/default-config`)
+    if (!result.success) throw new Error('获取默认策略配置失败')
+    return result.data!
+  },
+
+  async createStrategy(data: {
+    name: string
+    description: string
+    config: StrategyConfig
+  }): Promise<Strategy> {
+    const result = await httpClient.post<Strategy>(`${API_BASE}/strategies`, data)
+    if (!result.success) throw new Error('创建策略失败')
+    return result.data!
+  },
+
+  async updateStrategy(
+    strategyId: string,
+    data: {
+      name?: string
+      description?: string
+      config?: StrategyConfig
+    }
+  ): Promise<Strategy> {
+    const result = await httpClient.put<Strategy>(`${API_BASE}/strategies/${strategyId}`, data)
+    if (!result.success) throw new Error('更新策略失败')
+    return result.data!
+  },
+
+  async deleteStrategy(strategyId: string): Promise<void> {
+    const result = await httpClient.delete(`${API_BASE}/strategies/${strategyId}`)
+    if (!result.success) throw new Error('删除策略失败')
+  },
+
+  async activateStrategy(strategyId: string): Promise<Strategy> {
+    const result = await httpClient.post<Strategy>(`${API_BASE}/strategies/${strategyId}/activate`)
+    if (!result.success) throw new Error('激活策略失败')
+    return result.data!
+  },
+
+  async duplicateStrategy(strategyId: string): Promise<Strategy> {
+    const result = await httpClient.post<Strategy>(`${API_BASE}/strategies/${strategyId}/duplicate`)
+    if (!result.success) throw new Error('复制策略失败')
+    return result.data!
   },
 }

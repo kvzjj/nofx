@@ -91,6 +91,9 @@ export interface TraderInfo {
   ai_model: string
   exchange_id?: string
   is_running?: boolean
+  show_in_competition?: boolean
+  strategy_id?: string
+  strategy_name?: string
   custom_prompt?: string
   use_coin_pool?: boolean
   use_oi_top?: boolean
@@ -108,38 +111,61 @@ export interface AIModel {
 }
 
 export interface Exchange {
-  id: string
-  name: string
+  id: string                     // UUID (empty for supported exchange templates)
+  exchange_type: string          // "binance", "bybit", "okx", "hyperliquid", "aster", "lighter"
+  account_name: string           // User-defined account name
+  name: string                   // Display name
   type: 'cex' | 'dex'
   enabled: boolean
   apiKey?: string
   secretKey?: string
+  passphrase?: string            // OKX specific
   testnet?: boolean
-  // Hyperliquid 特定字段
+  // Hyperliquid specific
   hyperliquidWalletAddr?: string
-  // Aster 特定字段
+  // Aster specific
   asterUser?: string
   asterSigner?: string
   asterPrivateKey?: string
-  // LIGHTER 特定字段
+  // LIGHTER specific
   lighterWalletAddr?: string
   lighterPrivateKey?: string
   lighterApiKeyPrivateKey?: string
+}
+
+export interface CreateExchangeRequest {
+  exchange_type: string          // "binance", "bybit", "okx", "hyperliquid", "aster", "lighter"
+  account_name: string           // User-defined account name
+  enabled: boolean
+  api_key?: string
+  secret_key?: string
+  passphrase?: string
+  testnet?: boolean
+  hyperliquid_wallet_addr?: string
+  aster_user?: string
+  aster_signer?: string
+  aster_private_key?: string
+  lighter_wallet_addr?: string
+  lighter_private_key?: string
+  lighter_api_key_private_key?: string
 }
 
 export interface CreateTraderRequest {
   name: string
   ai_model_id: string
   exchange_id: string
+  strategy_id?: string // 策略ID（新版，使用保存的策略配置）
   initial_balance?: number // 可选：创建时由后端自动获取，编辑时可手动更新
   scan_interval_minutes?: number
+  is_cross_margin?: boolean
+  show_in_competition?: boolean // 是否在竞技场显示
+  // 以下字段为向后兼容保留，新版使用策略配置
   btc_eth_leverage?: number
   altcoin_leverage?: number
   trading_symbols?: string
   custom_prompt?: string
   override_base_prompt?: boolean
   system_prompt_template?: string
-  is_cross_margin?: boolean
   use_coin_pool?: boolean
   use_oi_top?: boolean
 }
@@ -161,6 +187,7 @@ export interface UpdateExchangeConfigRequest {
       enabled: boolean
       api_key: string
       secret_key: string
+      passphrase?: string
       testnet?: boolean
       // Hyperliquid 特定字段
       hyperliquid_wallet_addr?: string
@@ -201,18 +228,22 @@ export interface TraderConfigData {
   trader_name: string
   ai_model: string
   exchange_id: string
-  btc_eth_leverage: number
-  altcoin_leverage: number
-  trading_symbols: string
-  custom_prompt: string
-  override_base_prompt: boolean
-  system_prompt_template: string
+  strategy_id?: string  // 策略ID
+  strategy_name?: string  // 策略名称
   is_cross_margin: boolean
-  use_coin_pool: boolean
-  use_oi_top: boolean
-  initial_balance: number
+  show_in_competition: boolean  // 是否在竞技场显示
   scan_interval_minutes: number
+  initial_balance: number
   is_running: boolean
+  // 以下为旧版字段（向后兼容）
+  btc_eth_leverage?: number
+  altcoin_leverage?: number
+  trading_symbols?: string
+  custom_prompt?: string
+  override_base_prompt?: boolean
+  system_prompt_template?: string
+  use_coin_pool?: boolean
+  use_oi_top?: boolean
 }
 
 // Backtest types
@@ -346,4 +377,105 @@ export interface BacktestStartConfig {
     btc_eth_leverage?: number;
     altcoin_leverage?: number;
   };
+}
+
+// Strategy Studio Types
+export interface Strategy {
+  id: string;
+  name: string;
+  description: string;
+  is_active: boolean;
+  is_default: boolean;
+  config: StrategyConfig;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface PromptSectionsConfig {
+  role_definition?: string;
+  trading_frequency?: string;
+  entry_standards?: string;
+  decision_process?: string;
+}
+
+export interface StrategyConfig {
+  coin_source: CoinSourceConfig;
+  indicators: IndicatorConfig;
+  custom_prompt?: string;
+  risk_control: RiskControlConfig;
+  prompt_sections?: PromptSectionsConfig;
+}
+
+export interface CoinSourceConfig {
+  source_type: 'static' | 'coinpool' | 'oi_top' | 'mixed';
+  static_coins?: string[];
+  use_coin_pool: boolean;
+  coin_pool_limit?: number;
+  coin_pool_api_url?: string;  // AI500 币种池 API URL
+  use_oi_top: boolean;
+  oi_top_limit?: number;
+  oi_top_api_url?: string;     // OI Top API URL
+}
+
+export interface IndicatorConfig {
+  klines: KlineConfig;
+  // Raw OHLCV kline data - required for AI analysis
+  enable_raw_klines: boolean;
+  // Technical indicators (optional)
+  enable_ema: boolean;
+  enable_macd: boolean;
+  enable_rsi: boolean;
+  enable_atr: boolean;
+  enable_volume: boolean;
+  enable_oi: boolean;
+  enable_funding_rate: boolean;
+  ema_periods?: number[];
+  rsi_periods?: number[];
+  atr_periods?: number[];
+  external_data_sources?: ExternalDataSource[];
+  // 量化数据源（资金流向、持仓变化、价格变化）
+  enable_quant_data?: boolean;
+  quant_data_api_url?: string;
+  enable_quant_oi?: boolean;
+  enable_quant_netflow?: boolean;
+}
+
+export interface KlineConfig {
+  primary_timeframe: string;
+  primary_count: number;
+  longer_timeframe?: string;
+  longer_count?: number;
+  enable_multi_timeframe: boolean;
+  // 新增：支持选择多个时间周期
+  selected_timeframes?: string[];
+}
+
+export interface ExternalDataSource {
+  name: string;
+  type: 'api' | 'webhook';
+  url: string;
+  method: string;
+  headers?: Record<string, string>;
+  data_path?: string;
+  refresh_secs?: number;
+}
+
+export interface RiskControlConfig {
+  // Max number of coins held simultaneously (CODE ENFORCED)
+  max_positions: number;
+
+  // Trading Leverage - exchange leverage for opening positions (AI guided)
+  btc_eth_max_leverage: number;    // BTC/ETH max exchange leverage
+  altcoin_max_leverage: number;    // Altcoin max exchange leverage
+
+  // Position Value Ratio - single position notional value / account equity (CODE ENFORCED)
+  // Max position value = equity × this ratio
+  btc_eth_max_position_value_ratio?: number;     // default: 5 (BTC/ETH max position = 5x equity)
+  altcoin_max_position_value_ratio?: number;     // default: 1 (Altcoin max position = 1x equity)
+
+  // Risk Parameters
+  max_margin_usage: number;        // Max margin utilization, e.g. 0.9 = 90% (CODE ENFORCED)
+  min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
+  min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
+  min_confidence: number;          // Min AI confidence to open position (AI guided)
 }
