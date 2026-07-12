@@ -219,15 +219,14 @@ func (cfg *BacktestConfig) ToStrategyConfig() *store.StrategyConfig {
 		},
 		CustomPrompt: cfg.CustomPrompt,
 		RiskControl: store.RiskControlConfig{
-			MaxPositions:                 3,
-			BTCETHMaxLeverage:            cfg.Leverage.BTCETHLeverage,
-			AltcoinMaxLeverage:           cfg.Leverage.AltcoinLeverage,
-			BTCETHMaxPositionValueRatio:  5.0,
-			AltcoinMaxPositionValueRatio: 1.0,
-			MaxMarginUsage:               0.9,
-			MinPositionSize:              12,
-			MinRiskRewardRatio:           3.0,
-			MinConfidence:                75,
+			MaxPositions:         3,
+			BTCETHMaxLeverage:    cfg.Leverage.BTCETHLeverage,
+			AltcoinMaxLeverage:   cfg.Leverage.AltcoinLeverage,
+			MaxPositionSize:      1000,
+			MaxTotalPositionSize: 3000,
+			MinPositionSize:      12,
+			MinRiskRewardRatio:   3.0,
+			MinConfidence:        75,
 		},
 	}
 }

@@ -370,7 +370,7 @@ export function TraderConfigModal({
                       币种来源: 固定币种
                     </div>
                     <div>
-                      保证金上限: {((selectedStrategy.config.risk_control?.max_margin_usage || 0.9) * 100).toFixed(0)}%
+                      单笔 / 总仓位上限: {selectedStrategy.config.risk_control?.max_position_size || 1000} / {selectedStrategy.config.risk_control?.max_total_position_size || 3000} USDT
                     </div>
                   </div>
                 </div>

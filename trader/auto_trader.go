@@ -125,6 +125,7 @@ type AutoTrader struct {
 	monitorWg             sync.WaitGroup     // Used to wait for monitoring goroutine to finish
 	peakPnLCache          map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
 	peakPnLCacheMutex     sync.RWMutex       // Cache read-write lock
+	entryMutex            sync.Mutex         // Serializes risk snapshot and entry submission
 	lastBalanceSyncTime   time.Time          // Last balance sync time
 	userID                string             // User ID
 }
@@ -813,6 +814,11 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 
 // executeDecisionWithRecord executes AI decision and records detailed information
 func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, actionRecord *store.DecisionAction) error {
+	if decision.Action == "open_long" || decision.Action == "open_short" {
+		if err := at.enforceEntryDecision(decision); err != nil {
+			return err
+		}
+	}
 	switch decision.Action {
 	case "open_long":
 		return at.executeOpenLongWithRecord(decision, actionRecord)
@@ -828,6 +834,30 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 	default:
 		return fmt.Errorf("unknown action: %s", decision.Action)
 	}
+}
+
+func (at *AutoTrader) enforceEntryDecision(d *decision.Decision) error {
+	if at.config.StrategyConfig == nil {
+		return nil
+	}
+	riskControl := at.config.StrategyConfig.RiskControl
+	if d.Confidence < riskControl.MinConfidence {
+		return fmt.Errorf("❌ [RISK CONTROL] Confidence %d below minimum %d", d.Confidence, riskControl.MinConfidence)
+	}
+	maxLeverage := riskControl.AltcoinMaxLeverage
+	if isBTCETHSymbol(d.Symbol) {
+		maxLeverage = riskControl.BTCETHMaxLeverage
+	}
+	if maxLeverage > 0 && d.Leverage > maxLeverage {
+		logger.Infof("  ⚠️ [RISK CONTROL] Leverage %dx exceeds limit %dx, capping", d.Leverage, maxLeverage)
+		d.Leverage = maxLeverage
+	}
+	return nil
+}
+
+func isBTCETHSymbol(symbol string) bool {
+	symbol = strings.ToUpper(symbol)
+	return strings.HasPrefix(symbol, "BTC") || strings.HasPrefix(symbol, "ETH")
 }
 
 // ExecuteDecision executes a trading decision from external sources (e.g., debate consensus)
@@ -902,6 +932,8 @@ func (at *AutoTrader) openShort(symbol string, quantity float64, leverage int, c
 
 // executeOpenLongWithRecord executes open long position and records detailed information
 func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, actionRecord *store.DecisionAction) error {
+	at.entryMutex.Lock()
+	defer at.entryMutex.Unlock()
 	logger.Infof("  📈 Open long: %s", decision.Symbol)
 
 	// ⚠️ Get current positions for multiple checks
@@ -938,21 +970,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		availableBalance = avail
 	}
 
-	// Get equity for position value ratio check
-	equity := 0.0
-	if eq, ok := balance["totalEquity"].(float64); ok && eq > 0 {
-		equity = eq
-	} else if eq, ok := balance["totalWalletBalance"].(float64); ok && eq > 0 {
-		equity = eq
-	} else {
-		equity = availableBalance // Fallback to available balance
-	}
-
-	// [CODE ENFORCED] Position Value Ratio Check: position_value <= equity × ratio
-	adjustedPositionSize, wasCapped := at.enforcePositionValueRatio(decision.PositionSizeUSD, equity, decision.Symbol)
-	if wasCapped {
-		decision.PositionSizeUSD = adjustedPositionSize
-	}
+	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
 
 	// ⚠️ Auto-adjust position size if insufficient margin
 	// Formula: totalRequired = positionSize/leverage + positionSize*0.001 + positionSize/leverage*0.01
@@ -1025,6 +1043,8 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 
 // executeOpenShortWithRecord executes open short position and records detailed information
 func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, actionRecord *store.DecisionAction) error {
+	at.entryMutex.Lock()
+	defer at.entryMutex.Unlock()
 	logger.Infof("  📉 Open short: %s", decision.Symbol)
 
 	// ⚠️ Get current positions for multiple checks
@@ -1061,21 +1081,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		availableBalance = avail
 	}
 
-	// Get equity for position value ratio check
-	equity := 0.0
-	if eq, ok := balance["totalEquity"].(float64); ok && eq > 0 {
-		equity = eq
-	} else if eq, ok := balance["totalWalletBalance"].(float64); ok && eq > 0 {
-		equity = eq
-	} else {
-		equity = availableBalance // Fallback to available balance
-	}
-
-	// [CODE ENFORCED] Position Value Ratio Check: position_value <= equity × ratio
-	adjustedPositionSize, wasCapped := at.enforcePositionValueRatio(decision.PositionSizeUSD, equity, decision.Symbol)
-	if wasCapped {
-		decision.PositionSizeUSD = adjustedPositionSize
-	}
+	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
 
 	// ⚠️ Auto-adjust position size if insufficient margin
 	// Formula: totalRequired = positionSize/leverage + positionSize*0.001 + positionSize/leverage*0.01
@@ -1974,49 +1980,62 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 // Risk Control Helpers
 // ============================================================================
 
-// isBTCETH checks if a symbol is BTC or ETH
-func isBTCETH(symbol string) bool {
-	symbol = strings.ToUpper(symbol)
-	return strings.HasPrefix(symbol, "BTC") || strings.HasPrefix(symbol, "ETH")
-}
-
-// enforcePositionValueRatio checks and enforces position value ratio limits (CODE ENFORCED)
-// Returns the adjusted position size (capped if necessary) and whether the position was capped
-// positionSizeUSD: the original position size in USD
-// equity: the account equity
-// symbol: the trading symbol
-func (at *AutoTrader) enforcePositionValueRatio(positionSizeUSD float64, equity float64, symbol string) (float64, bool) {
+// enforcePositionSizeLimits caps an opening order by both the per-order and
+// aggregate open-position notional limits.
+func (at *AutoTrader) enforcePositionSizeLimits(positionSizeUSD float64, positions []map[string]interface{}) float64 {
 	if at.config.StrategyConfig == nil {
-		return positionSizeUSD, false
+		return positionSizeUSD
 	}
 
 	riskControl := at.config.StrategyConfig.RiskControl
-
-	// Get the appropriate position value ratio limit
-	var maxPositionValueRatio float64
-	if isBTCETH(symbol) {
-		maxPositionValueRatio = riskControl.BTCETHMaxPositionValueRatio
-		if maxPositionValueRatio <= 0 {
-			maxPositionValueRatio = 5.0 // Default: 5x for BTC/ETH
-		}
-	} else {
-		maxPositionValueRatio = riskControl.AltcoinMaxPositionValueRatio
-		if maxPositionValueRatio <= 0 {
-			maxPositionValueRatio = 1.0 // Default: 1x for altcoins
-		}
+	if riskControl.MaxPositionSize > 0 && positionSizeUSD > riskControl.MaxPositionSize {
+		logger.Infof("  ⚠️ [RISK CONTROL] Opening order %.2f USDT exceeds per-order limit %.2f USDT, capping",
+			positionSizeUSD, riskControl.MaxPositionSize)
+		positionSizeUSD = riskControl.MaxPositionSize
 	}
 
-	// Calculate max allowed position value = equity × ratio
-	maxPositionValue := equity * maxPositionValueRatio
-
-	// Check if position size exceeds limit
-	if positionSizeUSD > maxPositionValue {
-		logger.Infof("  ⚠️ [RISK CONTROL] Position %.2f USDT exceeds limit (equity %.2f × %.1fx = %.2f USDT max for %s), capping",
-			positionSizeUSD, equity, maxPositionValueRatio, maxPositionValue, symbol)
-		return maxPositionValue, true
+	if riskControl.MaxTotalPositionSize > 0 {
+		remaining := riskControl.MaxTotalPositionSize - totalPositionNotional(positions)
+		if remaining < positionSizeUSD {
+			logger.Infof("  ⚠️ [RISK CONTROL] Opening order %.2f USDT exceeds remaining total-position limit %.2f USDT, capping",
+				positionSizeUSD, math.Max(remaining, 0))
+			positionSizeUSD = math.Max(remaining, 0)
+		}
 	}
+	return positionSizeUSD
+}
 
-	return positionSizeUSD, false
+func totalPositionNotional(positions []map[string]interface{}) float64 {
+	total := 0.0
+	for _, position := range positions {
+		quantity := math.Abs(numberValue(position["positionAmt"]))
+		price := numberValue(position["markPrice"])
+		if price <= 0 {
+			price = numberValue(position["entryPrice"])
+		}
+		if quantity > 0 && price > 0 {
+			total += quantity * price
+		}
+	}
+	return total
+}
+
+func numberValue(value interface{}) float64 {
+	switch v := value.(type) {
+	case float64:
+		return v
+	case float32:
+		return float64(v)
+	case int:
+		return float64(v)
+	case int64:
+		return float64(v)
+	case string:
+		parsed, _ := strconv.ParseFloat(v, 64)
+		return parsed
+	default:
+		return 0
+	}
 }
 
 // enforceMinPositionSize checks minimum position size (CODE ENFORCED)

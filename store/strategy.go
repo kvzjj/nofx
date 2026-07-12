@@ -132,12 +132,11 @@ type ExternalDataSource struct {
 //   - BTCETHMaxLeverage: BTC/ETH max exchange leverage (AI guided)
 //   - AltcoinMaxLeverage: Altcoin max exchange leverage (AI guided)
 //
-// Position Value Limits (single position notional value / account equity):
-//   - BTCETHMaxPositionValueRatio: BTC/ETH max = equity × ratio (CODE ENFORCED)
-//   - AltcoinMaxPositionValueRatio: Altcoin max = equity × ratio (CODE ENFORCED)
+// Position Value Limits:
+//   - MaxPositionSize: maximum notional value of one opening order (CODE ENFORCED)
+//   - MaxTotalPositionSize: maximum total notional value after opening (CODE ENFORCED)
 //
 // Risk Controls:
-//   - MaxMarginUsage: max margin utilization percentage (CODE ENFORCED)
 //   - MinPositionSize: minimum position size in USDT (CODE ENFORCED)
 //   - MinRiskRewardRatio: min take_profit / stop_loss ratio (AI guided)
 //   - MinConfidence: min AI confidence to open position (AI guided)
@@ -154,13 +153,10 @@ type RiskControlConfig struct {
 	// Altcoin exchange leverage for opening positions (AI guided)
 	AltcoinMaxLeverage int `json:"altcoin_max_leverage"`
 
-	// BTC/ETH single position max value = equity × this ratio (CODE ENFORCED, default: 5)
-	BTCETHMaxPositionValueRatio float64 `json:"btc_eth_max_position_value_ratio"`
-	// Altcoin single position max value = equity × this ratio (CODE ENFORCED, default: 1)
-	AltcoinMaxPositionValueRatio float64 `json:"altcoin_max_position_value_ratio"`
-
-	// Max margin utilization (e.g. 0.9 = 90%) (CODE ENFORCED)
-	MaxMarginUsage float64 `json:"max_margin_usage"`
+	// Maximum notional value of a single opening order in USDT (CODE ENFORCED)
+	MaxPositionSize float64 `json:"max_position_size"`
+	// Maximum total open-position notional value in USDT (CODE ENFORCED)
+	MaxTotalPositionSize float64 `json:"max_total_position_size"`
 	// Min position size in USDT (CODE ENFORCED)
 	MinPositionSize float64 `json:"min_position_size"`
 
@@ -252,17 +248,16 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			OIRankingLimit:    10,
 		},
 		RiskControl: RiskControlConfig{
-			MaxPositions:                 3,   // Max 3 coins simultaneously (CODE ENFORCED)
-			BTCETHMaxLeverage:            5,   // BTC/ETH exchange leverage (AI guided)
-			AltcoinMaxLeverage:           5,   // Altcoin exchange leverage (AI guided)
-			BTCETHMaxPositionValueRatio:  5.0, // BTC/ETH: max position = 5x equity (CODE ENFORCED)
-			AltcoinMaxPositionValueRatio: 1.0, // Altcoin: max position = 1x equity (CODE ENFORCED)
-			MaxMarginUsage:               0.9, // Max 90% margin usage (CODE ENFORCED)
-			MinPositionSize:              12,  // Min 12 USDT per position (CODE ENFORCED)
-			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (AI guided)
-			MinConfidence:                75,  // Min 75% confidence (AI guided)
-			OrderType:                    "market",
-			LimitPriceOffsetPct:          0.05,
+			MaxPositions:         3,    // Max 3 coins simultaneously (CODE ENFORCED)
+			BTCETHMaxLeverage:    5,    // BTC/ETH exchange leverage (AI guided)
+			AltcoinMaxLeverage:   5,    // Altcoin exchange leverage (AI guided)
+			MaxPositionSize:      1000, // Max 1,000 USDT per opening order
+			MaxTotalPositionSize: 3000, // Max 3,000 USDT total open notional
+			MinPositionSize:      12,   // Min 12 USDT per position (CODE ENFORCED)
+			MinRiskRewardRatio:   3.0,  // Min 3:1 profit/loss ratio (AI guided)
+			MinConfidence:        75,   // Min 75% confidence (AI guided)
+			OrderType:            "market",
+			LimitPriceOffsetPct:  0.05,
 		},
 	}
 
@@ -496,11 +491,12 @@ func (s *Strategy) ParseConfig() (*StrategyConfig, error) {
 	if err := json.Unmarshal([]byte(s.Config), &config); err != nil {
 		return nil, fmt.Errorf("failed to parse strategy configuration: %w", err)
 	}
-	applyStrategyDefaults(&config)
+	config.ApplyDefaults()
 	return &config, nil
 }
 
-func applyStrategyDefaults(config *StrategyConfig) {
+// ApplyDefaults normalizes omitted fields, including strategies saved by older versions.
+func (config *StrategyConfig) ApplyDefaults() {
 	config.CoinSource.SourceType = "static"
 	if len(config.CoinSource.StaticCoins) == 0 {
 		config.CoinSource.StaticCoins = append([]string(nil), defaultStaticCoins...)
@@ -511,11 +507,35 @@ func applyStrategyDefaults(config *StrategyConfig) {
 	if config.RiskControl.LimitPriceOffsetPct <= 0 {
 		config.RiskControl.LimitPriceOffsetPct = 0.05
 	}
+	if config.RiskControl.MaxPositionSize <= 0 {
+		config.RiskControl.MaxPositionSize = 1000
+	}
+	if config.RiskControl.MaxTotalPositionSize <= 0 {
+		config.RiskControl.MaxTotalPositionSize = 3000
+	}
+	if config.RiskControl.MaxPositions <= 0 {
+		config.RiskControl.MaxPositions = 3
+	}
+	if config.RiskControl.BTCETHMaxLeverage <= 0 {
+		config.RiskControl.BTCETHMaxLeverage = 5
+	}
+	if config.RiskControl.AltcoinMaxLeverage <= 0 {
+		config.RiskControl.AltcoinMaxLeverage = 5
+	}
+	if config.RiskControl.MinPositionSize <= 0 {
+		config.RiskControl.MinPositionSize = 12
+	}
+	if config.RiskControl.MinRiskRewardRatio <= 0 {
+		config.RiskControl.MinRiskRewardRatio = 3
+	}
+	if config.RiskControl.MinConfidence <= 0 {
+		config.RiskControl.MinConfidence = 75
+	}
 }
 
 // SetConfig set strategy configuration
 func (s *Strategy) SetConfig(config *StrategyConfig) error {
-	applyStrategyDefaults(config)
+	config.ApplyDefaults()
 	data, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to serialize strategy configuration: %w", err)

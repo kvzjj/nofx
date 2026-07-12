@@ -48,6 +48,7 @@ func (s *Server) handleGetStrategies(c *gin.Context) {
 	for _, st := range strategies {
 		var config store.StrategyConfig
 		json.Unmarshal([]byte(st.Config), &config)
+		config.ApplyDefaults()
 
 		result = append(result, gin.H{
 			"id":          st.ID,
@@ -84,6 +85,7 @@ func (s *Server) handleGetStrategy(c *gin.Context) {
 
 	var config store.StrategyConfig
 	json.Unmarshal([]byte(strategy.Config), &config)
+	config.ApplyDefaults()
 
 	c.JSON(http.StatusOK, gin.H{
 		"id":          strategy.ID,
@@ -115,6 +117,7 @@ func (s *Server) handleCreateStrategy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request parameters: " + err.Error()})
 		return
 	}
+	req.Config.ApplyDefaults()
 
 	// Serialize configuration
 	configJSON, err := json.Marshal(req.Config)
@@ -183,6 +186,7 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request parameters: " + err.Error()})
 		return
 	}
+	req.Config.ApplyDefaults()
 
 	// Serialize configuration
 	configJSON, err := json.Marshal(req.Config)
@@ -334,15 +338,16 @@ func (s *Server) handlePreviewPrompt(c *gin.Context) {
 	}
 
 	var req struct {
-		Config          store.StrategyConfig `json:"config" binding:"required"`
-		AccountEquity   float64              `json:"account_equity"`
-		PromptVariant   string               `json:"prompt_variant"`
+		Config        store.StrategyConfig `json:"config" binding:"required"`
+		AccountEquity float64              `json:"account_equity"`
+		PromptVariant string               `json:"prompt_variant"`
 	}
 
 	if err := c.ShouldBindJSON(&req); err != nil {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid request parameters: " + err.Error()})
 		return
 	}
+	req.Config.ApplyDefaults()
 
 	// Use default values
 	if req.AccountEquity <= 0 {
@@ -585,4 +590,3 @@ func (s *Server) runRealAITest(userID, modelID, systemPrompt, userPrompt string)
 
 	return response, nil
 }
-
