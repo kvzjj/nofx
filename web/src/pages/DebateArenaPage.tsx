@@ -329,22 +329,18 @@ function CreateModal({
   // Get the selected strategy's coin source config
   const selectedStrategy = strategies.find(s => s.id === strategyId)
   const coinSource = selectedStrategy?.config?.coin_source
-  const sourceType = coinSource?.source_type || 'static'
   const staticCoins = coinSource?.static_coins || []
-  // Only show coin selector for static type with coins defined
-  const isStaticWithCoins = sourceType === 'static' && staticCoins.length > 0
+  const hasStaticCoins = staticCoins.length > 0
 
   useEffect(() => {
     if (isOpen) {
       const firstStrategy = strategies[0]
       const firstStrategyId = firstStrategy?.id || ''
       const firstCoinSource = firstStrategy?.config?.coin_source
-      const firstSourceType = firstCoinSource?.source_type || 'static'
       const firstStaticCoins = firstCoinSource?.static_coins || []
       setName('')
       setStrategyId(firstStrategyId)
-      // Only set symbol for static type, otherwise leave empty (backend will choose)
-      setSymbol(firstSourceType === 'static' && firstStaticCoins.length > 0 ? firstStaticCoins[0] : '')
+      setSymbol(firstStaticCoins.length > 0 ? firstStaticCoins[0] : '')
       setMaxRounds(3)
       setParticipants([])
     }
@@ -352,15 +348,14 @@ function CreateModal({
 
   // Update symbol when strategy changes
   useEffect(() => {
-    if (isStaticWithCoins) {
+    if (hasStaticCoins) {
       if (!staticCoins.includes(symbol)) {
         setSymbol(staticCoins[0])
       }
     } else {
-      // Non-static strategy: clear symbol, backend will auto-select
       setSymbol('')
     }
-  }, [strategyId, isStaticWithCoins, staticCoins, symbol])
+  }, [strategyId, hasStaticCoins, staticCoins, symbol])
 
   const addP = () => {
     if (participants.length >= 10 || aiModels.length === 0) return
@@ -406,15 +401,14 @@ function CreateModal({
           </select>
 
           <div className="flex gap-2">
-            {/* Show dropdown only for static type with coins defined */}
-            {isStaticWithCoins ? (
+            {hasStaticCoins ? (
               <select value={symbol} onChange={e => setSymbol(e.target.value)}
                 className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-white text-sm">
                 {staticCoins.map(coin => <option key={coin} value={coin}>{coin}</option>)}
               </select>
             ) : (
               <div className="flex-1 px-3 py-2 rounded-lg bg-white/5 border border-white/10 text-gray-400 text-sm">
-                {language === 'zh' ? '根据策略规则自动选择' : 'Auto-selected by strategy'}
+                {language === 'zh' ? '静态列表为空' : 'Static list is empty'}
               </div>
             )}
             <select value={maxRounds} onChange={e => setMaxRounds(+e.target.value)}

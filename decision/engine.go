@@ -67,7 +67,7 @@ type AccountInfo struct {
 // CandidateCoin candidate coin (from coin pool)
 type CandidateCoin struct {
 	Symbol  string   `json:"symbol"`
-	Sources []string `json:"sources"` // Sources: "ai500" and/or "oi_top"
+	Sources []string `json:"sources"` // Sources: "static"
 }
 
 // OITopData open interest growth top data (for AI decision reference)
@@ -383,16 +383,8 @@ func fetchMarketDataWithStrategy(ctx *Context, engine *StrategyEngine) error {
 // GetCandidateCoins gets candidate coins based on strategy configuration
 func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 	var candidates []CandidateCoin
-	symbolSources := make(map[string][]string)
 
 	coinSource := e.config.CoinSource
-
-	if coinSource.CoinPoolAPIURL != "" {
-		pool.SetCoinPoolAPI(coinSource.CoinPoolAPIURL)
-	}
-	if coinSource.OITopAPIURL != "" {
-		pool.SetOITopAPI(coinSource.OITopAPIURL)
-	}
 
 	switch coinSource.SourceType {
 	case "static":
@@ -405,99 +397,9 @@ func (e *StrategyEngine) GetCandidateCoins() ([]CandidateCoin, error) {
 		}
 		return candidates, nil
 
-	case "coinpool":
-		return e.getCoinPoolCoins(coinSource.CoinPoolLimit)
-
-	case "oi_top":
-		return e.getOITopCoins(coinSource.OITopLimit)
-
-	case "mixed":
-		if coinSource.UseCoinPool {
-			poolCoins, err := e.getCoinPoolCoins(coinSource.CoinPoolLimit)
-			if err != nil {
-				logger.Infof("⚠️  Failed to get AI500 coin pool: %v", err)
-			} else {
-				for _, coin := range poolCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "ai500")
-				}
-			}
-		}
-
-		if coinSource.UseOITop {
-			oiCoins, err := e.getOITopCoins(coinSource.OITopLimit)
-			if err != nil {
-				logger.Infof("⚠️  Failed to get OI Top: %v", err)
-			} else {
-				for _, coin := range oiCoins {
-					symbolSources[coin.Symbol] = append(symbolSources[coin.Symbol], "oi_top")
-				}
-			}
-		}
-
-		for _, symbol := range coinSource.StaticCoins {
-			symbol = market.Normalize(symbol)
-			if _, exists := symbolSources[symbol]; !exists {
-				symbolSources[symbol] = []string{"static"}
-			} else {
-				symbolSources[symbol] = append(symbolSources[symbol], "static")
-			}
-		}
-
-		for symbol, sources := range symbolSources {
-			candidates = append(candidates, CandidateCoin{
-				Symbol:  symbol,
-				Sources: sources,
-			})
-		}
-		return candidates, nil
-
 	default:
-		return nil, fmt.Errorf("unknown coin source type: %s", coinSource.SourceType)
+		return nil, fmt.Errorf("unsupported coin source type: %s", coinSource.SourceType)
 	}
-}
-
-func (e *StrategyEngine) getCoinPoolCoins(limit int) ([]CandidateCoin, error) {
-	if limit <= 0 {
-		limit = 30
-	}
-
-	symbols, err := pool.GetTopRatedCoins(limit)
-	if err != nil {
-		return nil, err
-	}
-
-	var candidates []CandidateCoin
-	for _, symbol := range symbols {
-		candidates = append(candidates, CandidateCoin{
-			Symbol:  symbol,
-			Sources: []string{"ai500"},
-		})
-	}
-	return candidates, nil
-}
-
-func (e *StrategyEngine) getOITopCoins(limit int) ([]CandidateCoin, error) {
-	if limit <= 0 {
-		limit = 20
-	}
-
-	positions, err := pool.GetOITopPositions()
-	if err != nil {
-		return nil, err
-	}
-
-	var candidates []CandidateCoin
-	for i, pos := range positions {
-		if i >= limit {
-			break
-		}
-		symbol := market.Normalize(pos.Symbol)
-		candidates = append(candidates, CandidateCoin{
-			Symbol:  symbol,
-			Sources: []string{"oi_top"},
-		})
-	}
-	return candidates, nil
 }
 
 // ============================================================================
@@ -865,8 +767,8 @@ func (e *StrategyEngine) writeAvailableIndicators(sb *strings.Builder) {
 		sb.WriteString("- Funding rate\n")
 	}
 
-	if len(e.config.CoinSource.StaticCoins) > 0 || e.config.CoinSource.UseCoinPool || e.config.CoinSource.UseOITop {
-		sb.WriteString("- AI500 / OI_Top filter tags (if available)\n")
+	if len(e.config.CoinSource.StaticCoins) > 0 {
+		sb.WriteString("- Static coin list tags\n")
 	}
 
 	if indicators.EnableQuantData {
@@ -1004,14 +906,8 @@ func (e *StrategyEngine) formatPositionInfo(index int, pos PositionInfo, ctx *Co
 }
 
 func (e *StrategyEngine) formatCoinSourceTag(sources []string) string {
-	if len(sources) > 1 {
-		return " (AI500+OI_Top dual signal)"
-	} else if len(sources) == 1 {
+	if len(sources) == 1 {
 		switch sources[0] {
-		case "ai500":
-			return " (AI500)"
-		case "oi_top":
-			return " (OI_Top position growth)"
 		case "static":
 			return " (Manual selection)"
 		}

@@ -576,10 +576,11 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 				exchangeCfg.SecretKey,
 			)
 		case "okx":
-			tempTrader = trader.NewOKXTrader(
+			tempTrader = trader.NewOKXTraderWithTestnet(
 				exchangeCfg.APIKey,
 				exchangeCfg.SecretKey,
 				exchangeCfg.Passphrase,
+				exchangeCfg.Testnet,
 			)
 		case "bitget":
 			tempTrader = trader.NewBitgetTrader(
@@ -1093,10 +1094,11 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 			exchangeCfg.SecretKey,
 		)
 	case "okx":
-		tempTrader = trader.NewOKXTrader(
+		tempTrader = trader.NewOKXTraderWithTestnet(
 			exchangeCfg.APIKey,
 			exchangeCfg.SecretKey,
 			exchangeCfg.Passphrase,
+			exchangeCfg.Testnet,
 		)
 	case "bitget":
 		tempTrader = trader.NewBitgetTrader(
@@ -1247,10 +1249,11 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 			exchangeCfg.SecretKey,
 		)
 	case "okx":
-		tempTrader = trader.NewOKXTrader(
+		tempTrader = trader.NewOKXTraderWithTestnet(
 			exchangeCfg.APIKey,
 			exchangeCfg.SecretKey,
 			exchangeCfg.Passphrase,
+			exchangeCfg.Testnet,
 		)
 	case "bitget":
 		tempTrader = trader.NewBitgetTrader(
@@ -2114,20 +2117,6 @@ func (s *Server) handleRegister(c *gin.Context) {
 		return
 	}
 
-	// Check max users limit
-	maxUsers := config.Get().MaxUsers
-	if maxUsers > 0 {
-		userCount, err := s.store.User().Count()
-		if err != nil {
-			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check user count"})
-			return
-		}
-		if userCount >= maxUsers {
-			c.JSON(http.StatusForbidden, gin.H{"error": "Not on whitelist"})
-			return
-		}
-	}
-
 	var req struct {
 		Email    string `json:"email" binding:"required,email"`
 		Password string `json:"password" binding:"required,min=6"`
@@ -2138,11 +2127,36 @@ func (s *Server) handleRegister(c *gin.Context) {
 		return
 	}
 
-	// Check if email already exists
-	_, err := s.store.User().GetByEmail(req.Email)
-	if err == nil {
-		c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
+	// Existing users that have not completed OTP can resume setup.
+	if existingUser, err := s.store.User().GetByEmail(req.Email); err == nil {
+		if existingUser.OTPVerified {
+			c.JSON(http.StatusConflict, gin.H{"error": "Email already registered"})
+			return
+		}
+
+		qrCodeURL := auth.GetOTPQRCodeURL(existingUser.OTPSecret, existingUser.Email)
+		c.JSON(http.StatusOK, gin.H{
+			"user_id":     existingUser.ID,
+			"email":       existingUser.Email,
+			"otp_secret":  existingUser.OTPSecret,
+			"qr_code_url": qrCodeURL,
+			"message":     "Incomplete registration detected, please continue OTP setup",
+		})
 		return
+	}
+
+	// Check max users limit
+	maxUsers := config.Get().MaxUsers
+	if maxUsers > 0 {
+		userCount, err := s.store.User().CountVerified()
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check user count"})
+			return
+		}
+		if userCount >= maxUsers {
+			c.JSON(http.StatusForbidden, gin.H{"error": "Not on whitelist"})
+			return
+		}
 	}
 
 	// Generate password hash
@@ -2209,6 +2223,21 @@ func (s *Server) handleCompleteRegistration(c *gin.Context) {
 	if !auth.VerifyOTP(user.OTPSecret, req.OTPCode) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "OTP code error"})
 		return
+	}
+
+	if !user.OTPVerified {
+		maxUsers := config.Get().MaxUsers
+		if maxUsers > 0 {
+			userCount, err := s.store.User().CountVerified()
+			if err != nil {
+				c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check user count"})
+				return
+			}
+			if userCount >= maxUsers {
+				c.JSON(http.StatusForbidden, gin.H{"error": "Not on whitelist"})
+				return
+			}
+		}
 	}
 
 	// Update user OTP verified status

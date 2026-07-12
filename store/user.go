@@ -118,6 +118,13 @@ func (s *UserStore) Count() (int, error) {
 	return count, err
 }
 
+// CountVerified returns the number of users that completed OTP setup.
+func (s *UserStore) CountVerified() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM users WHERE otp_verified = 1`).Scan(&count)
+	return count, err
+}
+
 // GetAllIDs gets all user IDs
 func (s *UserStore) GetAllIDs() ([]string, error) {
 	rows, err := s.db.Query(`SELECT id FROM users ORDER BY id`)

@@ -83,6 +83,15 @@ export const api = {
     return result.data!
   },
 
+  async getPerformance(traderId?: string): Promise<any> {
+    const query = traderId
+      ? `?trader_id=${encodeURIComponent(traderId)}`
+      : ''
+    const result = await httpClient.get<any>(`${API_BASE}/performance${query}`)
+    if (!result.success) throw new Error('获取交易表现失败')
+    return result.data!
+  },
+
   async createTrader(request: CreateTraderRequest): Promise<TraderInfo> {
     const result = await httpClient.post<TraderInfo>(
       `${API_BASE}/traders`,

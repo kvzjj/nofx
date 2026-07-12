@@ -9,6 +9,7 @@ import (
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/store"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -28,19 +29,21 @@ type AutoTraderConfig struct {
 	// Binance API configuration
 	BinanceAPIKey    string
 	BinanceSecretKey string
+	BinanceTestnet   bool
 
 	// Bybit API configuration
 	BybitAPIKey    string
 	BybitSecretKey string
 
 	// OKX API configuration
-	OKXAPIKey    string
-	OKXSecretKey string
+	OKXAPIKey     string
+	OKXSecretKey  string
 	OKXPassphrase string
+	OKXTestnet    bool
 
 	// Bitget API configuration
-	BitgetAPIKey    string
-	BitgetSecretKey string
+	BitgetAPIKey     string
+	BitgetSecretKey  string
 	BitgetPassphrase string
 
 	// Hyperliquid configuration
@@ -82,6 +85,10 @@ type AutoTraderConfig struct {
 
 	// Position mode
 	IsCrossMargin bool // true=cross margin mode, false=isolated margin mode
+
+	// Order execution
+	OrderType           OrderType
+	LimitPriceOffsetPct float64
 
 	// Competition visibility
 	ShowInCompetition bool // Whether to show in competition page
@@ -205,6 +212,16 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	if config.Exchange == "" {
 		config.Exchange = "binance"
 	}
+	if config.OrderType == "" {
+		config.OrderType = OrderTypeMarket
+	}
+	if config.OrderType != OrderTypeMarket && config.OrderType != OrderTypeLimit {
+		logger.Infof("⚠️ [%s] Unsupported order type %q, falling back to market", config.Name, config.OrderType)
+		config.OrderType = OrderTypeMarket
+	}
+	if config.LimitPriceOffsetPct <= 0 {
+		config.LimitPriceOffsetPct = 0.05
+	}
 
 	// Create corresponding trader based on configuration
 	var trader Trader
@@ -219,14 +236,14 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 
 	switch config.Exchange {
 	case "binance":
-		logger.Infof("🏦 [%s] Using Binance Futures trading", config.Name)
-		trader = NewFuturesTrader(config.BinanceAPIKey, config.BinanceSecretKey, userID)
+		logger.Infof("🏦 [%s] Using Binance Futures trading (testnet=%v)", config.Name, config.BinanceTestnet)
+		trader = NewFuturesTraderWithTestnet(config.BinanceAPIKey, config.BinanceSecretKey, userID, config.BinanceTestnet)
 	case "bybit":
 		logger.Infof("🏦 [%s] Using Bybit Futures trading", config.Name)
 		trader = NewBybitTrader(config.BybitAPIKey, config.BybitSecretKey)
 	case "okx":
-		logger.Infof("🏦 [%s] Using OKX Futures trading", config.Name)
-		trader = NewOKXTrader(config.OKXAPIKey, config.OKXSecretKey, config.OKXPassphrase)
+		logger.Infof("🏦 [%s] Using OKX Futures trading (testnet=%v)", config.Name, config.OKXTestnet)
+		trader = NewOKXTraderWithTestnet(config.OKXAPIKey, config.OKXSecretKey, config.OKXPassphrase, config.OKXTestnet)
 	case "bitget":
 		logger.Infof("🏦 [%s] Using Bitget Futures trading", config.Name)
 		trader = NewBitgetTrader(config.BitgetAPIKey, config.BitgetSecretKey, config.BitgetPassphrase)
@@ -836,6 +853,53 @@ func (at *AutoTrader) ExecuteDecision(d *decision.Decision) error {
 	return nil
 }
 
+func (at *AutoTrader) buildOpenOrderOptions(side string, currentPrice float64) OrderOptions {
+	orderType := at.config.OrderType
+	if orderType == "" {
+		orderType = OrderTypeMarket
+	}
+
+	options := OrderOptions{Type: orderType}
+	if orderType != OrderTypeLimit {
+		return options
+	}
+
+	offset := at.config.LimitPriceOffsetPct
+	if offset <= 0 {
+		offset = 0.05
+	}
+	offsetRatio := offset / 100
+	if side == "long" {
+		options.LimitPrice = currentPrice * (1 - offsetRatio)
+	} else {
+		options.LimitPrice = currentPrice * (1 + offsetRatio)
+	}
+	logger.Infof("  🧾 Using limit order: side=%s current=%.8f offset=%.4f%% limit=%.8f", side, currentPrice, offset, options.LimitPrice)
+	return options
+}
+
+func (at *AutoTrader) openLong(symbol string, quantity float64, leverage int, currentPrice float64) (map[string]interface{}, error) {
+	options := at.buildOpenOrderOptions("long", currentPrice)
+	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
+		return advanced.OpenLongWithOptions(symbol, quantity, leverage, options)
+	}
+	if options.Type == OrderTypeLimit {
+		logger.Infof("  ⚠️ %s does not support configurable order type, falling back to market order", at.exchange)
+	}
+	return at.trader.OpenLong(symbol, quantity, leverage)
+}
+
+func (at *AutoTrader) openShort(symbol string, quantity float64, leverage int, currentPrice float64) (map[string]interface{}, error) {
+	options := at.buildOpenOrderOptions("short", currentPrice)
+	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
+		return advanced.OpenShortWithOptions(symbol, quantity, leverage, options)
+	}
+	if options.Type == OrderTypeLimit {
+		logger.Infof("  ⚠️ %s does not support configurable order type, falling back to market order", at.exchange)
+	}
+	return at.trader.OpenShort(symbol, quantity, leverage)
+}
+
 // executeOpenLongWithRecord executes open long position and records detailed information
 func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, actionRecord *store.DecisionAction) error {
 	logger.Infof("  📈 Open long: %s", decision.Symbol)
@@ -923,7 +987,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	// Open position
-	order, err := at.trader.OpenLong(decision.Symbol, quantity, decision.Leverage)
+	order, err := at.openLong(decision.Symbol, quantity, decision.Leverage, marketData.CurrentPrice)
 	if err != nil {
 		return err
 	}
@@ -936,7 +1000,13 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0)
+	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0) {
+		logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
+		if isLimitOrderResult(order) {
+			at.monitorPendingEntryOrder(order, decision.Symbol, "open_long", "LONG", quantity, marketData.CurrentPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
+		}
+		return nil
+	}
 
 	// Record position opening time
 	posKey := decision.Symbol + "_long"
@@ -1040,7 +1110,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	}
 
 	// Open position
-	order, err := at.trader.OpenShort(decision.Symbol, quantity, decision.Leverage)
+	order, err := at.openShort(decision.Symbol, quantity, decision.Leverage, marketData.CurrentPrice)
 	if err != nil {
 		return err
 	}
@@ -1053,7 +1123,13 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, marketData.CurrentPrice, decision.Leverage, 0)
+	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, marketData.CurrentPrice, decision.Leverage, 0) {
+		logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
+		if isLimitOrderResult(order) {
+			at.monitorPendingEntryOrder(order, decision.Symbol, "open_short", "SHORT", quantity, marketData.CurrentPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
+		}
+		return nil
+	}
 
 	// Record position opening time
 	posKey := decision.Symbol + "_short"
@@ -1288,6 +1364,37 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 	}
 }
 
+func accountNumber(values map[string]interface{}, keys ...string) (float64, bool) {
+	for _, key := range keys {
+		value, exists := values[key]
+		if !exists || value == nil {
+			continue
+		}
+
+		switch number := value.(type) {
+		case float64:
+			if !math.IsNaN(number) && !math.IsInf(number, 0) {
+				return number, true
+			}
+		case float32:
+			parsed := float64(number)
+			if !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+				return parsed, true
+			}
+		case int:
+			return float64(number), true
+		case int64:
+			return float64(number), true
+		case string:
+			parsed, err := strconv.ParseFloat(number, 64)
+			if err == nil && !math.IsNaN(parsed) && !math.IsInf(parsed, 0) {
+				return parsed, true
+			}
+		}
+	}
+	return 0, false
+}
+
 // GetAccountInfo gets account information (for API)
 func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 	balance, err := at.trader.GetBalance()
@@ -1295,23 +1402,25 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("failed to get balance: %w", err)
 	}
 
-	// Get account fields
-	totalWalletBalance := 0.0
-	totalUnrealizedProfit := 0.0
-	availableBalance := 0.0
-
-	if wallet, ok := balance["totalWalletBalance"].(float64); ok {
-		totalWalletBalance = wallet
+	// Prefer the exchange's account-level equity. Reconstruct it only for
+	// exchanges that expose wallet balance and unrealized PnL separately.
+	totalUnrealizedProfit, _ := accountNumber(balance,
+		"totalUnrealizedProfit", "unrealized_profit", "unrealized_pnl")
+	totalEquity, hasTotalEquity := accountNumber(balance,
+		"total_equity", "totalEquity", "totalEq", "accountEquity")
+	totalWalletBalance, hasWalletBalance := accountNumber(balance,
+		"totalWalletBalance", "wallet_balance", "walletBalance")
+	if !hasTotalEquity {
+		if !hasWalletBalance {
+			return nil, fmt.Errorf("balance response does not contain total equity or wallet balance")
+		}
+		totalEquity = totalWalletBalance + totalUnrealizedProfit
 	}
-	if unrealized, ok := balance["totalUnrealizedProfit"].(float64); ok {
-		totalUnrealizedProfit = unrealized
+	if !hasWalletBalance {
+		totalWalletBalance = totalEquity - totalUnrealizedProfit
 	}
-	if avail, ok := balance["availableBalance"].(float64); ok {
-		availableBalance = avail
-	}
-
-	// Total Equity = Wallet balance + Unrealized profit
-	totalEquity := totalWalletBalance + totalUnrealizedProfit
+	availableBalance, _ := accountNumber(balance,
+		"availableBalance", "available_balance", "available", "availBal")
 
 	// Get positions to calculate total margin
 	positions, err := at.trader.GetPositions()
@@ -1319,23 +1428,29 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		return nil, fmt.Errorf("failed to get positions: %w", err)
 	}
 
-	totalMarginUsed := 0.0
+	totalMarginUsed, hasAccountMargin := accountNumber(balance, "margin_used", "marginUsed")
 	totalUnrealizedPnLCalculated := 0.0
 	for _, pos := range positions {
-		markPrice := pos["markPrice"].(float64)
-		quantity := pos["positionAmt"].(float64)
+		markPrice, hasMarkPrice := accountNumber(pos, "markPrice", "mark_price")
+		quantity, hasQuantity := accountNumber(pos, "positionAmt", "size", "quantity")
 		if quantity < 0 {
 			quantity = -quantity
 		}
-		unrealizedPnl := pos["unRealizedProfit"].(float64)
-		totalUnrealizedPnLCalculated += unrealizedPnl
-
-		leverage := 10
-		if lev, ok := pos["leverage"].(float64); ok {
-			leverage = int(lev)
+		if unrealizedPnl, ok := accountNumber(pos, "unRealizedProfit", "unrealized_pnl", "unrealizedPnl"); ok {
+			totalUnrealizedPnLCalculated += unrealizedPnl
 		}
-		marginUsed := (quantity * markPrice) / float64(leverage)
-		totalMarginUsed += marginUsed
+
+		if hasAccountMargin {
+			continue
+		}
+		if positionMargin, ok := accountNumber(pos, "margin_used", "marginUsed", "positionInitialMargin"); ok {
+			totalMarginUsed += positionMargin
+			continue
+		}
+		leverage, hasLeverage := accountNumber(pos, "leverage")
+		if hasMarkPrice && hasQuantity && hasLeverage && leverage > 0 {
+			totalMarginUsed += (quantity * markPrice) / leverage
+		}
 	}
 
 	// Verify unrealized P&L consistency (API value vs calculated from positions)
@@ -1632,30 +1747,107 @@ func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
 	delete(at.peakPnLCache, posKey)
 }
 
-// recordAndConfirmOrder polls order status for actual fill data and records position
-// action: open_long, open_short, close_long, close_short
-// entryPrice: entry price when closing (0 when opening)
-func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, symbol, action string, quantity float64, price float64, leverage int, entryPrice float64) {
-	if at.store == nil {
-		return
-	}
+func isLimitOrderResult(orderResult map[string]interface{}) bool {
+	orderType, ok := orderResult["orderType"].(string)
+	return ok && orderType == string(OrderTypeLimit)
+}
 
-	// Get order ID (supports multiple types)
-	var orderID string
+func getOrderIDString(orderResult map[string]interface{}) string {
 	switch v := orderResult["orderId"].(type) {
 	case int64:
-		orderID = fmt.Sprintf("%d", v)
+		return fmt.Sprintf("%d", v)
 	case float64:
-		orderID = fmt.Sprintf("%.0f", v)
+		return fmt.Sprintf("%.0f", v)
 	case string:
-		orderID = v
+		return v
 	default:
-		orderID = fmt.Sprintf("%v", v)
+		return fmt.Sprintf("%v", v)
+	}
+}
+
+func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{}, symbol, action, positionSide string, quantity, fallbackPrice float64, leverage int, stopLoss, takeProfit float64) {
+	orderID := getOrderIDString(orderResult)
+	if orderID == "" || orderID == "0" {
+		return
 	}
 
+	go func() {
+		logger.Infof("  ⏳ Monitoring pending limit order %s for %s %s", orderID, symbol, action)
+		ticker := time.NewTicker(15 * time.Second)
+		defer ticker.Stop()
+		timeout := time.NewTimer(30 * time.Minute)
+		defer timeout.Stop()
+
+		for {
+			select {
+			case <-at.stopMonitorCh:
+				logger.Infof("  ⏹ Stop monitoring pending order %s because trader stopped", orderID)
+				return
+			case <-timeout.C:
+				logger.Infof("  ⏰ Pending limit order %s was not filled within 30 minutes", orderID)
+				return
+			case <-ticker.C:
+				status, err := at.trader.GetOrderStatus(symbol, orderID)
+				if err != nil {
+					logger.Infof("  ⚠️ Failed to check pending order %s: %v", orderID, err)
+					continue
+				}
+
+				statusStr, _ := status["status"].(string)
+				switch statusStr {
+				case "FILLED":
+					actualPrice := fallbackPrice
+					actualQty := quantity
+					var fee float64
+					if avgPrice, ok := status["avgPrice"].(float64); ok && avgPrice > 0 {
+						actualPrice = avgPrice
+					}
+					if execQty, ok := status["executedQty"].(float64); ok && execQty > 0 {
+						actualQty = execQty
+					}
+					if commission, ok := status["commission"].(float64); ok {
+						fee = commission
+					}
+
+					at.recordPositionChange(orderID, symbol, positionSide, action, actualQty, actualPrice, leverage, 0, fee)
+					if err := at.trader.SetStopLoss(symbol, positionSide, actualQty, stopLoss); err != nil {
+						logger.Infof("  ⚠ Failed to set stop loss after pending fill: %v", err)
+					}
+					if err := at.trader.SetTakeProfit(symbol, positionSide, actualQty, takeProfit); err != nil {
+						logger.Infof("  ⚠ Failed to set take profit after pending fill: %v", err)
+					}
+					logger.Infof("  ✅ Pending limit order filled and protected: %s %s order=%s", symbol, positionSide, orderID)
+					return
+				case "CANCELED", "EXPIRED", "REJECTED":
+					logger.Infof("  ⚠️ Pending limit order %s ended with status %s", orderID, statusStr)
+					return
+				}
+			}
+		}
+	}()
+}
+
+// recordAndConfirmOrder polls order status for actual fill data and records position.
+// It returns true only when the order can be treated as filled/recorded locally.
+// action: open_long, open_short, close_long, close_short
+// entryPrice: entry price when closing (0 when opening)
+func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, symbol, action string, quantity float64, price float64, leverage int, entryPrice float64) bool {
+	isLimitOrder := false
+	if orderType, ok := orderResult["orderType"].(string); ok && orderType == string(OrderTypeLimit) {
+		isLimitOrder = true
+	}
+	if at.store == nil {
+		if isLimitOrder {
+			logger.Infof("  ⏳ Limit order submitted, store is unavailable so filled state cannot be confirmed")
+			return false
+		}
+		return true
+	}
+
+	orderID := getOrderIDString(orderResult)
 	if orderID == "" || orderID == "0" {
 		logger.Infof("  ⚠️ Order ID is empty, skipping record")
-		return
+		return false
 	}
 
 	// Determine positionSide
@@ -1668,9 +1860,10 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 	}
 
 	// Poll order status to get actual fill price, quantity and fee
-	var actualPrice = price       // fallback to market price
-	var actualQty = quantity      // fallback to requested quantity
+	var actualPrice = price  // fallback to market price
+	var actualQty = quantity // fallback to requested quantity
 	var fee float64
+	orderFilled := false
 
 	// Wait for order to be filled and get actual fill data
 	time.Sleep(500 * time.Millisecond)
@@ -1692,13 +1885,19 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 					fee = commission
 				}
 				logger.Infof("  ✅ Order filled: avgPrice=%.6f, qty=%.6f, fee=%.6f", actualPrice, actualQty, fee)
+				orderFilled = true
 				break
 			} else if statusStr == "CANCELED" || statusStr == "EXPIRED" || statusStr == "REJECTED" {
 				logger.Infof("  ⚠️ Order %s, skipping position record", statusStr)
-				return
+				return false
 			}
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+
+	if isLimitOrder && !orderFilled {
+		logger.Infof("  ⏳ Limit order %s not filled yet, local position record will wait for a later sync", orderID)
+		return false
 	}
 
 	logger.Infof("  📝 Recording position (ID: %s, action: %s, price: %.6f, qty: %.6f, fee: %.4f)",
@@ -1706,6 +1905,7 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 
 	// Record position change with actual fill data
 	at.recordPositionChange(orderID, symbol, positionSide, action, actualQty, actualPrice, leverage, entryPrice, fee)
+	return true
 }
 
 // recordPositionChange records position change (create record on open, update record on close)
@@ -1755,10 +1955,10 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 		// Update position record
 		err = at.store.Position().ClosePosition(
 			openPos.ID,
-			price,       // exitPrice
-			orderID,     // exitOrderID
+			price,   // exitPrice
+			orderID, // exitOrderID
 			realizedPnL,
-			fee,         // fee from exchange API
+			fee, // fee from exchange API
 			"ai_decision",
 		)
 		if err != nil {
@@ -1852,4 +2052,3 @@ func (at *AutoTrader) enforceMaxPositions(currentPositionCount int) error {
 	}
 	return nil
 }
-

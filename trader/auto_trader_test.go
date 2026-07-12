@@ -64,7 +64,6 @@ func (s *AutoTraderTestSuite) SetupTest() {
 		positions: []map[string]interface{}{},
 	}
 
-
 	// Create temporary store (using nil means no actual store needed in test)
 	s.mockStore = nil
 
@@ -274,6 +273,36 @@ func (s *AutoTraderTestSuite) TestGetAccountInfo() {
 	s.Equal(10100.0, accountInfo["total_equity"]) // 10000 + 100
 	s.Equal(8000.0, accountInfo["available_balance"])
 	s.Equal(100.0, accountInfo["total_pnl"]) // 10100 - 10000
+}
+
+func (s *AutoTraderTestSuite) TestGetAccountInfoUsesAuthoritativeEquityAndSnakeCaseFields() {
+	s.mockTrader.balance = map[string]interface{}{
+		"total_equity":      "10250.50",
+		"available_balance": 7000.25,
+		"unrealized_pnl":    50.5,
+		"margin_used":       3250.25,
+	}
+	s.mockTrader.positions = []map[string]interface{}{
+		{"symbol": "BTCUSDT", "unrealized_pnl": "50.5"},
+	}
+
+	accountInfo, err := s.autoTrader.GetAccountInfo()
+
+	s.NoError(err)
+	s.Equal(10250.5, accountInfo["total_equity"])
+	s.Equal(10200.0, accountInfo["wallet_balance"])
+	s.Equal(7000.25, accountInfo["available_balance"])
+	s.Equal(250.5, accountInfo["total_pnl"])
+	s.Equal(3250.25, accountInfo["margin_used"])
+}
+
+func (s *AutoTraderTestSuite) TestGetAccountInfoRejectsMissingBalanceTotals() {
+	s.mockTrader.balance = map[string]interface{}{"available_balance": 100.0}
+
+	accountInfo, err := s.autoTrader.GetAccountInfo()
+
+	s.Error(err)
+	s.Nil(accountInfo)
 }
 
 // ============================================================

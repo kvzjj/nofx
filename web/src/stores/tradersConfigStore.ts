@@ -8,6 +8,10 @@ interface TradersConfigState {
   allExchanges: Exchange[]
   supportedModels: AIModel[]
   supportedExchanges: Exchange[]
+  userSignalSource: {
+    coinPoolUrl: string
+    oiTopUrl: string
+  }
 
   // 计算属性
   configuredModels: AIModel[]
@@ -18,6 +22,10 @@ interface TradersConfigState {
   setAllExchanges: (exchanges: Exchange[]) => void
   setSupportedModels: (models: AIModel[]) => void
   setSupportedExchanges: (exchanges: Exchange[]) => void
+  setUserSignalSource: (source: {
+    coinPoolUrl: string
+    oiTopUrl: string
+  }) => void
 
   // 异步加载
   loadConfigs: (user: any, token: string | null) => Promise<void>
@@ -33,6 +41,10 @@ const initialState = {
   supportedExchanges: [],
   configuredModels: [],
   configuredExchanges: [],
+  userSignalSource: {
+    coinPoolUrl: localStorage.getItem('coin_pool_url') || '',
+    oiTopUrl: localStorage.getItem('oi_top_url') || '',
+  },
 }
 
 export const useTradersConfigStore = create<TradersConfigState>((set, get) => ({
@@ -65,6 +77,11 @@ export const useTradersConfigStore = create<TradersConfigState>((set, get) => ({
 
   setSupportedModels: (models) => set({ supportedModels: models }),
   setSupportedExchanges: (exchanges) => set({ supportedExchanges: exchanges }),
+  setUserSignalSource: (source) => {
+    localStorage.setItem('coin_pool_url', source.coinPoolUrl)
+    localStorage.setItem('oi_top_url', source.oiTopUrl)
+    set({ userSignalSource: source })
+  },
 
   loadConfigs: async (user, token) => {
     if (!user || !token) {

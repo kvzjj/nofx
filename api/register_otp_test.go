@@ -1,7 +1,19 @@
 package api
 
 import (
+	"bytes"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
+	"time"
+
+	"nofx/config"
+	"nofx/store"
+
+	"github.com/gin-gonic/gin"
+	"github.com/pquerna/otp/totp"
 )
 
 // MockUser Mock user structure
@@ -10,6 +22,184 @@ type MockUser struct {
 	Email       string
 	OTPSecret   string
 	OTPVerified bool
+}
+
+func TestHandleRegisterResumesIncompleteOTPSetup(t *testing.T) {
+	st := newTestStore(t)
+	cfg := config.Get()
+	oldRegistrationEnabled := cfg.RegistrationEnabled
+	oldMaxUsers := cfg.MaxUsers
+	cfg.RegistrationEnabled = true
+	cfg.MaxUsers = 1
+	t.Cleanup(func() {
+		cfg.RegistrationEnabled = oldRegistrationEnabled
+		cfg.MaxUsers = oldMaxUsers
+	})
+
+	existingUser := &store.User{
+		ID:           "user-incomplete",
+		Email:        "incomplete@example.com",
+		PasswordHash: "old-hash",
+		OTPSecret:    "JBSWY3DPEHPK3PXP",
+		OTPVerified:  false,
+	}
+	if err := st.User().Create(existingUser); err != nil {
+		t.Fatalf("failed to create existing user: %v", err)
+	}
+
+	resp := postRegister(t, st, map[string]string{
+		"email":    existingUser.Email,
+		"password": "NewPassword1!",
+	})
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+
+	var body map[string]any
+	if err := json.Unmarshal(resp.Body.Bytes(), &body); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+	if body["user_id"] != existingUser.ID {
+		t.Fatalf("expected existing user_id %q, got %v", existingUser.ID, body["user_id"])
+	}
+	if body["otp_secret"] != existingUser.OTPSecret {
+		t.Fatalf("expected existing otp_secret %q, got %v", existingUser.OTPSecret, body["otp_secret"])
+	}
+}
+
+func TestHandleRegisterMaxUsersIgnoresIncompleteRegistrations(t *testing.T) {
+	st := newTestStore(t)
+	cfg := config.Get()
+	oldRegistrationEnabled := cfg.RegistrationEnabled
+	oldMaxUsers := cfg.MaxUsers
+	cfg.RegistrationEnabled = true
+	cfg.MaxUsers = 1
+	t.Cleanup(func() {
+		cfg.RegistrationEnabled = oldRegistrationEnabled
+		cfg.MaxUsers = oldMaxUsers
+	})
+
+	if err := st.User().Create(&store.User{
+		ID:           "user-incomplete",
+		Email:        "incomplete@example.com",
+		PasswordHash: "old-hash",
+		OTPSecret:    "JBSWY3DPEHPK3PXP",
+		OTPVerified:  false,
+	}); err != nil {
+		t.Fatalf("failed to create existing user: %v", err)
+	}
+
+	resp := postRegister(t, st, map[string]string{
+		"email":    "new@example.com",
+		"password": "NewPassword1!",
+	})
+
+	if resp.Code != http.StatusOK {
+		t.Fatalf("expected HTTP 200, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func TestHandleCompleteRegistrationEnforcesMaxUsers(t *testing.T) {
+	st := newTestStore(t)
+	cfg := config.Get()
+	oldRegistrationEnabled := cfg.RegistrationEnabled
+	oldMaxUsers := cfg.MaxUsers
+	cfg.RegistrationEnabled = true
+	cfg.MaxUsers = 1
+	t.Cleanup(func() {
+		cfg.RegistrationEnabled = oldRegistrationEnabled
+		cfg.MaxUsers = oldMaxUsers
+	})
+
+	if err := st.User().Create(&store.User{
+		ID:           "user-verified",
+		Email:        "verified@example.com",
+		PasswordHash: "old-hash",
+		OTPSecret:    "JBSWY3DPEHPK3PXP",
+		OTPVerified:  true,
+	}); err != nil {
+		t.Fatalf("failed to create verified user: %v", err)
+	}
+
+	otpSecret := "JBSWY3DPEHPK3PXP"
+	if err := st.User().Create(&store.User{
+		ID:           "user-incomplete",
+		Email:        "incomplete@example.com",
+		PasswordHash: "old-hash",
+		OTPSecret:    otpSecret,
+		OTPVerified:  false,
+	}); err != nil {
+		t.Fatalf("failed to create incomplete user: %v", err)
+	}
+
+	otpCode, err := totp.GenerateCode(otpSecret, time.Now())
+	if err != nil {
+		t.Fatalf("failed to generate OTP code: %v", err)
+	}
+
+	resp := postCompleteRegistration(t, st, map[string]string{
+		"user_id":  "user-incomplete",
+		"otp_code": otpCode,
+	})
+
+	if resp.Code != http.StatusForbidden {
+		t.Fatalf("expected HTTP 403, got %d: %s", resp.Code, resp.Body.String())
+	}
+}
+
+func newTestStore(t *testing.T) *store.Store {
+	t.Helper()
+
+	st, err := store.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("failed to create store: %v", err)
+	}
+	t.Cleanup(func() {
+		if err := st.Close(); err != nil {
+			t.Fatalf("failed to close store: %v", err)
+		}
+	})
+	return st
+}
+
+func postRegister(t *testing.T, st *store.Store, payload map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+
+	server := &Server{store: st}
+	req := httptest.NewRequest(http.MethodPost, "/api/register", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	server.handleRegister(newTestGinContext(resp, req))
+	return resp
+}
+
+func postCompleteRegistration(t *testing.T, st *store.Store, payload map[string]string) *httptest.ResponseRecorder {
+	t.Helper()
+
+	body, err := json.Marshal(payload)
+	if err != nil {
+		t.Fatalf("failed to marshal payload: %v", err)
+	}
+
+	server := &Server{store: st}
+	req := httptest.NewRequest(http.MethodPost, "/api/complete-registration", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
+	resp := httptest.NewRecorder()
+	server.handleCompleteRegistration(newTestGinContext(resp, req))
+	return resp
+}
+
+func newTestGinContext(resp *httptest.ResponseRecorder, req *http.Request) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	c, _ := gin.CreateTestContext(resp)
+	c.Request = req
+	return c
 }
 
 // TestOTPRefetchLogic Test OTP refetch logic

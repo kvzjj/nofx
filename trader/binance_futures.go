@@ -5,6 +5,7 @@ import (
 	"crypto/rand"
 	"encoding/hex"
 	"fmt"
+	"math"
 	"nofx/hook"
 	"nofx/logger"
 	"strconv"
@@ -45,7 +46,8 @@ func getBrOrderID() string {
 
 // FuturesTrader Binance futures trader
 type FuturesTrader struct {
-	client *futures.Client
+	client  *futures.Client
+	testnet bool
 
 	// Balance cache
 	cachedBalance     map[string]interface{}
@@ -63,17 +65,29 @@ type FuturesTrader struct {
 
 // NewFuturesTrader creates futures trader
 func NewFuturesTrader(apiKey, secretKey string, userId string) *FuturesTrader {
+	return NewFuturesTraderWithTestnet(apiKey, secretKey, userId, false)
+}
+
+// NewFuturesTraderWithTestnet creates futures trader with optional Binance Futures testnet endpoint.
+func NewFuturesTraderWithTestnet(apiKey, secretKey string, userId string, testnet bool) *FuturesTrader {
 	client := futures.NewClient(apiKey, secretKey)
+	if testnet {
+		client.BaseURL = futures.BaseApiTestnetUrl
+	}
 
 	hookRes := hook.HookExec[hook.NewBinanceTraderResult](hook.NEW_BINANCE_TRADER, userId, client)
 	if hookRes != nil && hookRes.GetResult() != nil {
 		client = hookRes.GetResult()
+		if testnet {
+			client.BaseURL = futures.BaseApiTestnetUrl
+		}
 	}
 
 	// Sync time to avoid "Timestamp ahead" error
 	syncBinanceServerTime(client)
 	trader := &FuturesTrader{
 		client:        client,
+		testnet:       testnet,
 		cacheDuration: 15 * time.Second, // 15-second cache
 	}
 
@@ -315,61 +329,25 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 
 // OpenLong opens a long position
 func (t *FuturesTrader) OpenLong(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
-	// First cancel all pending orders for this symbol (clean up old stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel old pending orders (may not have any): %v", err)
-	}
+	return t.OpenLongWithOptions(symbol, quantity, leverage, OrderOptions{Type: OrderTypeMarket})
+}
 
-	// Set leverage
-	if err := t.SetLeverage(symbol, leverage); err != nil {
-		return nil, err
-	}
-
-	// Note: Margin mode should be set by the caller (AutoTrader) before opening position via SetMarginMode
-
-	// Format quantity to correct precision
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
-	if err != nil {
-		return nil, err
-	}
-
-	// Check if formatted quantity is 0 (prevent rounding errors)
-	quantityFloat, parseErr := strconv.ParseFloat(quantityStr, 64)
-	if parseErr != nil || quantityFloat <= 0 {
-		return nil, fmt.Errorf("position size too small, rounded to 0 (original: %.8f → formatted: %s). Suggest increasing position amount or selecting a lower-priced coin", quantity, quantityStr)
-	}
-
-	// Check minimum notional value (Binance requires at least 10 USDT)
-	if err := t.CheckMinNotional(symbol, quantityFloat); err != nil {
-		return nil, err
-	}
-
-	// Create market buy order (using br ID)
-	order, err := t.client.NewCreateOrderService().
-		Symbol(symbol).
-		Side(futures.SideTypeBuy).
-		PositionSide(futures.PositionSideTypeLong).
-		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		NewClientOrderID(getBrOrderID()).
-		Do(context.Background())
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to open long position: %w", err)
-	}
-
-	logger.Infof("✓ Opened long position successfully: %s quantity: %s", symbol, quantityStr)
-	logger.Infof("  Order ID: %d", order.OrderID)
-
-	result := make(map[string]interface{})
-	result["orderId"] = order.OrderID
-	result["symbol"] = order.Symbol
-	result["status"] = order.Status
-	return result, nil
+// OpenLongWithOptions opens a long position using market or limit order.
+func (t *FuturesTrader) OpenLongWithOptions(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
+	return t.openPosition(symbol, quantity, leverage, futures.SideTypeBuy, futures.PositionSideTypeLong, "long", options)
 }
 
 // OpenShort opens a short position
 func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
+	return t.OpenShortWithOptions(symbol, quantity, leverage, OrderOptions{Type: OrderTypeMarket})
+}
+
+// OpenShortWithOptions opens a short position using market or limit order.
+func (t *FuturesTrader) OpenShortWithOptions(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
+	return t.openPosition(symbol, quantity, leverage, futures.SideTypeSell, futures.PositionSideTypeShort, "short", options)
+}
+
+func (t *FuturesTrader) openPosition(symbol string, quantity float64, leverage int, side futures.SideType, positionSide futures.PositionSideType, sideLabel string, options OrderOptions) (map[string]interface{}, error) {
 	// First cancel all pending orders for this symbol (clean up old stop-loss and take-profit orders)
 	if err := t.CancelAllOrders(symbol); err != nil {
 		logger.Infof("  ⚠ Failed to cancel old pending orders (may not have any): %v", err)
@@ -399,27 +377,60 @@ func (t *FuturesTrader) OpenShort(symbol string, quantity float64, leverage int)
 		return nil, err
 	}
 
-	// Create market sell order (using br ID)
-	order, err := t.client.NewCreateOrderService().
-		Symbol(symbol).
-		Side(futures.SideTypeSell).
-		PositionSide(futures.PositionSideTypeShort).
-		Type(futures.OrderTypeMarket).
-		Quantity(quantityStr).
-		NewClientOrderID(getBrOrderID()).
-		Do(context.Background())
-
-	if err != nil {
-		return nil, fmt.Errorf("failed to open short position: %w", err)
+	orderType := options.Type
+	if orderType == "" {
+		orderType = OrderTypeMarket
 	}
 
-	logger.Infof("✓ Opened short position successfully: %s quantity: %s", symbol, quantityStr)
+	orderService := t.client.NewCreateOrderService().
+		Symbol(symbol).
+		Side(side).
+		PositionSide(positionSide).
+		Quantity(quantityStr).
+		NewClientOrderID(getBrOrderID()).
+		Type(futures.OrderTypeMarket)
+
+	var submittedPrice string
+	switch orderType {
+	case OrderTypeMarket:
+		orderService.Type(futures.OrderTypeMarket)
+	case OrderTypeLimit:
+		if options.LimitPrice <= 0 {
+			return nil, fmt.Errorf("limit price must be greater than 0")
+		}
+		priceStr, err := t.FormatLimitPrice(symbol, options.LimitPrice, side)
+		if err != nil {
+			return nil, err
+		}
+		submittedPrice = priceStr
+		orderService.Type(futures.OrderTypeLimit).
+			TimeInForce(futures.TimeInForceTypeGTC).
+			Price(priceStr)
+	default:
+		return nil, fmt.Errorf("unsupported order type: %s", orderType)
+	}
+
+	order, err := orderService.Do(context.Background())
+
+	if err != nil {
+		return nil, fmt.Errorf("failed to open %s position: %w", sideLabel, err)
+	}
+
+	if orderType == OrderTypeLimit {
+		logger.Infof("✓ Submitted limit %s order successfully: %s quantity: %s price: %s", sideLabel, symbol, quantityStr, submittedPrice)
+	} else {
+		logger.Infof("✓ Opened %s position successfully: %s quantity: %s", sideLabel, symbol, quantityStr)
+	}
 	logger.Infof("  Order ID: %d", order.OrderID)
 
 	result := make(map[string]interface{})
 	result["orderId"] = order.OrderID
 	result["symbol"] = order.Symbol
 	result["status"] = order.Status
+	result["orderType"] = string(orderType)
+	if submittedPrice != "" {
+		result["price"] = submittedPrice
+	}
 	return result, nil
 }
 
@@ -850,6 +861,31 @@ func (t *FuturesTrader) GetSymbolPrecision(symbol string) (int, error) {
 	return 3, nil // Default precision is 3
 }
 
+// GetSymbolPriceFilter gets price precision and tick size for a trading pair.
+func (t *FuturesTrader) GetSymbolPriceFilter(symbol string) (int, float64, error) {
+	exchangeInfo, err := t.client.NewExchangeInfoService().Do(context.Background())
+	if err != nil {
+		return 0, 0, fmt.Errorf("failed to get trading rules: %w", err)
+	}
+
+	for _, s := range exchangeInfo.Symbols {
+		if s.Symbol == symbol {
+			for _, filter := range s.Filters {
+				if filter["filterType"] == "PRICE_FILTER" {
+					tickSize := filter["tickSize"].(string)
+					precision := calculatePrecision(tickSize)
+					tick, _ := strconv.ParseFloat(tickSize, 64)
+					logger.Infof("  %s price precision: %d (tickSize: %s)", symbol, precision, tickSize)
+					return precision, tick, nil
+				}
+			}
+		}
+	}
+
+	logger.Infof("  ⚠ %s price precision information not found, using default precision 4", symbol)
+	return 4, 0, nil
+}
+
 // calculatePrecision calculates precision from stepSize
 func calculatePrecision(stepSize string) int {
 	// Remove trailing zeros
@@ -903,6 +939,25 @@ func (t *FuturesTrader) FormatQuantity(symbol string, quantity float64) (string,
 
 	format := fmt.Sprintf("%%.%df", precision)
 	return fmt.Sprintf(format, quantity), nil
+}
+
+// FormatLimitPrice formats and aligns limit price to Binance tick size.
+func (t *FuturesTrader) FormatLimitPrice(symbol string, price float64, side futures.SideType) (string, error) {
+	precision, tickSize, err := t.GetSymbolPriceFilter(symbol)
+	if err != nil {
+		return fmt.Sprintf("%.4f", price), nil
+	}
+	if tickSize > 0 {
+		steps := price / tickSize
+		if side == futures.SideTypeBuy {
+			price = math.Floor(steps) * tickSize
+		} else {
+			price = math.Ceil(steps) * tickSize
+		}
+	}
+
+	format := fmt.Sprintf("%%.%df", precision)
+	return fmt.Sprintf(format, price), nil
 }
 
 // Helper functions

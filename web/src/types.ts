@@ -407,14 +407,8 @@ export interface StrategyConfig {
 }
 
 export interface CoinSourceConfig {
-  source_type: 'static' | 'coinpool' | 'oi_top' | 'mixed';
+  source_type: 'static';
   static_coins?: string[];
-  use_coin_pool: boolean;
-  coin_pool_limit?: number;
-  coin_pool_api_url?: string;  // AI500 币种池 API URL
-  use_oi_top: boolean;
-  oi_top_limit?: number;
-  oi_top_api_url?: string;     // OI Top API URL
 }
 
 export interface IndicatorConfig {
@@ -483,6 +477,8 @@ export interface RiskControlConfig {
   min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
   min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
   min_confidence: number;          // Min AI confidence to open position (AI guided)
+  order_type?: 'market' | 'limit'; // Opening order type; close orders remain market
+  limit_price_offset_pct?: number; // Limit order offset from current price in percent
 }
 
 // Debate Arena Types

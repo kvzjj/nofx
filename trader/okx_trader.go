@@ -40,6 +40,7 @@ type OKXTrader struct {
 	apiKey     string
 	secretKey  string
 	passphrase string
+	testnet    bool
 
 	// Margin mode setting
 	isCrossMargin bool
@@ -101,6 +102,11 @@ func genOkxClOrdID() string {
 
 // NewOKXTrader creates OKX trader
 func NewOKXTrader(apiKey, secretKey, passphrase string) *OKXTrader {
+	return NewOKXTraderWithTestnet(apiKey, secretKey, passphrase, false)
+}
+
+// NewOKXTraderWithTestnet creates OKX trader with optional simulated trading mode.
+func NewOKXTraderWithTestnet(apiKey, secretKey, passphrase string, testnet bool) *OKXTrader {
 	// Use default transport which respects system proxy settings
 	// OKX requires proxy in China due to DNS pollution
 	httpClient := &http.Client{
@@ -112,6 +118,7 @@ func NewOKXTrader(apiKey, secretKey, passphrase string) *OKXTrader {
 		apiKey:           apiKey,
 		secretKey:        secretKey,
 		passphrase:       passphrase,
+		testnet:          testnet,
 		httpClient:       httpClient,
 		cacheDuration:    15 * time.Second,
 		instrumentsCache: make(map[string]*OKXInstrument),
@@ -178,8 +185,11 @@ func (t *OKXTrader) doRequest(method, path string, body interface{}) ([]byte, er
 	req.Header.Set("OK-ACCESS-TIMESTAMP", timestamp)
 	req.Header.Set("OK-ACCESS-PASSPHRASE", t.passphrase)
 	req.Header.Set("Content-Type", "application/json")
-	// Set request header
-	req.Header.Set("x-simulated-trading", "0")
+	if t.testnet {
+		req.Header.Set("x-simulated-trading", "1")
+	} else {
+		req.Header.Set("x-simulated-trading", "0")
+	}
 
 	resp, err := t.httpClient.Do(req)
 	if err != nil {
@@ -1198,19 +1208,19 @@ func (t *OKXTrader) GetClosedPnL(startTime time.Time, limit int) ([]ClosedPnLRec
 		Code string `json:"code"`
 		Msg  string `json:"msg"`
 		Data []struct {
-			InstID      string `json:"instId"`      // Instrument ID (e.g., "BTC-USDT-SWAP")
-			Direction   string `json:"direction"`   // Position direction: "long" or "short"
-			OpenAvgPx   string `json:"openAvgPx"`   // Average open price
-			CloseAvgPx  string `json:"closeAvgPx"`  // Average close price
+			InstID        string `json:"instId"`        // Instrument ID (e.g., "BTC-USDT-SWAP")
+			Direction     string `json:"direction"`     // Position direction: "long" or "short"
+			OpenAvgPx     string `json:"openAvgPx"`     // Average open price
+			CloseAvgPx    string `json:"closeAvgPx"`    // Average close price
 			CloseTotalPos string `json:"closeTotalPos"` // Closed position quantity
-			RealizedPnl string `json:"realizedPnl"` // Realized PnL
-			Fee         string `json:"fee"`         // Total fee
-			FundingFee  string `json:"fundingFee"`  // Funding fee
-			Lever       string `json:"lever"`       // Leverage
-			CTime       string `json:"cTime"`       // Position open time
-			UTime       string `json:"uTime"`       // Position close time
-			Type        string `json:"type"`        // Close type: 1=close position, 2=partial close, 3=liquidation, 4=partial liquidation
-			PosId       string `json:"posId"`       // Position ID
+			RealizedPnl   string `json:"realizedPnl"`   // Realized PnL
+			Fee           string `json:"fee"`           // Total fee
+			FundingFee    string `json:"fundingFee"`    // Funding fee
+			Lever         string `json:"lever"`         // Leverage
+			CTime         string `json:"cTime"`         // Position open time
+			UTime         string `json:"uTime"`         // Position close time
+			Type          string `json:"type"`          // Close type: 1=close position, 2=partial close, 3=liquidation, 4=partial liquidation
+			PosId         string `json:"posId"`         // Position ID
 		} `json:"data"`
 	}
 

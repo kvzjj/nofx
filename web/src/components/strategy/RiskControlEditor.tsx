@@ -42,6 +42,13 @@ export function RiskControlEditor({
       minPositionSizeDesc: { zh: 'USDT 最小名义价值', en: 'Minimum notional value in USDT' },
       minConfidence: { zh: '最小信心度', en: 'Min Confidence' },
       minConfidenceDesc: { zh: 'AI 开仓信心度阈值', en: 'AI confidence threshold for entry' },
+      orderExecution: { zh: '订单执行', en: 'Order Execution' },
+      orderType: { zh: '开仓订单类型', en: 'Entry Order Type' },
+      orderTypeDesc: { zh: '平仓仍使用市价单，避免限价平仓无法成交', en: 'Close orders still use market orders to avoid unfilled exits' },
+      marketOrder: { zh: '市价单', en: 'Market' },
+      limitOrder: { zh: '限价单', en: 'Limit' },
+      limitOffset: { zh: '限价偏移', en: 'Limit Offset' },
+      limitOffsetDesc: { zh: '做多挂当前价下方，做空挂当前价上方', en: 'Long below current price, short above current price' },
     }
     return translations[key]?.[language] || key
   }
@@ -381,6 +388,88 @@ export function RiskControlEditor({
               />
               <span className="w-12 text-center font-mono" style={{ color: '#0ECB81' }}>
                 {config.min_confidence ?? 75}
+              </span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* Order Execution */}
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <Shield className="w-5 h-5" style={{ color: '#F0B90B' }} />
+          <h3 className="font-medium" style={{ color: '#EAECEF' }}>
+            {t('orderExecution')}
+          </h3>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4">
+          <div
+            className="p-4 rounded-lg"
+            style={{ background: '#0B0E11', border: '1px solid #2B3139' }}
+          >
+            <label className="block text-sm mb-1" style={{ color: '#EAECEF' }}>
+              {t('orderType')}
+            </label>
+            <p className="text-xs mb-3" style={{ color: '#848E9C' }}>
+              {t('orderTypeDesc')}
+            </p>
+            <div className="grid grid-cols-2 gap-2">
+              {(['market', 'limit'] as const).map((type) => {
+                const active = (config.order_type ?? 'market') === type
+                return (
+                  <button
+                    key={type}
+                    type="button"
+                    disabled={disabled}
+                    onClick={() => updateField('order_type', type)}
+                    className="px-3 py-2 rounded text-sm font-semibold disabled:opacity-50"
+                    style={{
+                      background: active ? '#F0B90B' : '#1E2329',
+                      border: `1px solid ${active ? '#F0B90B' : '#2B3139'}`,
+                      color: active ? '#000' : '#EAECEF',
+                    }}
+                  >
+                    {type === 'market' ? t('marketOrder') : t('limitOrder')}
+                  </button>
+                )
+              })}
+            </div>
+          </div>
+
+          <div
+            className="p-4 rounded-lg"
+            style={{
+              background: '#0B0E11',
+              border: `1px solid ${(config.order_type ?? 'market') === 'limit' ? '#F0B90B' : '#2B3139'}`,
+            }}
+          >
+            <label className="block text-sm mb-1" style={{ color: '#EAECEF' }}>
+              {t('limitOffset')}
+            </label>
+            <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
+              {t('limitOffsetDesc')}
+            </p>
+            <div className="flex items-center">
+              <input
+                type="number"
+                value={config.limit_price_offset_pct ?? 0.05}
+                onChange={(e) =>
+                  updateField('limit_price_offset_pct', parseFloat(e.target.value) || 0.05)
+                }
+                disabled={disabled || (config.order_type ?? 'market') !== 'limit'}
+                min={0.01}
+                max={5}
+                step={0.01}
+                className="w-24 px-3 py-2 rounded disabled:opacity-50"
+                style={{
+                  background: '#1E2329',
+                  border: '1px solid #2B3139',
+                  color: '#EAECEF',
+                }}
+              />
+              <span className="ml-2" style={{ color: '#848E9C' }}>
+                %
               </span>
             </div>
           </div>

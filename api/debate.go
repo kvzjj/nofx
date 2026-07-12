@@ -8,7 +8,6 @@ import (
 
 	"nofx/debate"
 	"nofx/logger"
-	"nofx/pool"
 	"nofx/store"
 
 	"github.com/gin-gonic/gin"
@@ -153,44 +152,8 @@ func (h *DebateHandler) HandleCreateDebate(c *gin.Context) {
 		req.Symbol = "BTCUSDT" // default fallback
 		if strategyConfig, err := strategy.ParseConfig(); err == nil {
 			coinSource := strategyConfig.CoinSource
-			switch coinSource.SourceType {
-			case "static":
-				if len(coinSource.StaticCoins) > 0 {
-					req.Symbol = coinSource.StaticCoins[0]
-				}
-			case "coinpool":
-				// Fetch from coin pool API
-				if coinSource.CoinPoolAPIURL != "" {
-					pool.SetCoinPoolAPI(coinSource.CoinPoolAPIURL)
-				}
-				if coins, err := pool.GetTopRatedCoins(1); err == nil && len(coins) > 0 {
-					req.Symbol = coins[0]
-					logger.Infof("Fetched coin from pool API: %s", req.Symbol)
-				}
-			case "oi_top":
-				// Fetch from OI top API
-				if coinSource.OITopAPIURL != "" {
-					pool.SetOITopAPI(coinSource.OITopAPIURL)
-				}
-				if coins, err := pool.GetOITopSymbols(); err == nil && len(coins) > 0 {
-					req.Symbol = coins[0]
-					logger.Infof("Fetched coin from OI Top API: %s", req.Symbol)
-				}
-			case "mixed":
-				// Try coin pool first, then OI top
-				if coinSource.UseCoinPool && coinSource.CoinPoolAPIURL != "" {
-					pool.SetCoinPoolAPI(coinSource.CoinPoolAPIURL)
-					if coins, err := pool.GetTopRatedCoins(1); err == nil && len(coins) > 0 {
-						req.Symbol = coins[0]
-						logger.Infof("Fetched coin from pool API (mixed): %s", req.Symbol)
-					}
-				} else if coinSource.UseOITop && coinSource.OITopAPIURL != "" {
-					pool.SetOITopAPI(coinSource.OITopAPIURL)
-					if coins, err := pool.GetOITopSymbols(); err == nil && len(coins) > 0 {
-						req.Symbol = coins[0]
-						logger.Infof("Fetched coin from OI Top API (mixed): %s", req.Symbol)
-					}
-				}
+			if coinSource.SourceType == "static" && len(coinSource.StaticCoins) > 0 {
+				req.Symbol = coinSource.StaticCoins[0]
 			}
 			logger.Infof("Auto-selected symbol %s for debate based on strategy %s (source_type=%s)",
 				req.Symbol, strategy.Name, coinSource.SourceType)

@@ -367,9 +367,7 @@ export function TraderConfigModal({
                   </p>
                   <div className="grid grid-cols-2 gap-2 text-xs text-[#848E9C]">
                     <div>
-                      币种来源: {selectedStrategy.config.coin_source.source_type === 'static' ? '固定币种' :
-                        selectedStrategy.config.coin_source.source_type === 'coinpool' ? 'Coin Pool' :
-                        selectedStrategy.config.coin_source.source_type === 'oi_top' ? 'OI Top' : '混合'}
+                      币种来源: 固定币种
                     </div>
                     <div>
                       保证金上限: {((selectedStrategy.config.risk_control?.max_margin_usage || 0.9) * 100).toFixed(0)}%

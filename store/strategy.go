@@ -12,15 +12,17 @@ type StrategyStore struct {
 	db *sql.DB
 }
 
+var defaultStaticCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "HYPEUSDT"}
+
 // Strategy strategy configuration
 type Strategy struct {
 	ID          string    `json:"id"`
 	UserID      string    `json:"user_id"`
 	Name        string    `json:"name"`
 	Description string    `json:"description"`
-	IsActive    bool      `json:"is_active"`    // whether it is active (a user can only have one active strategy)
-	IsDefault   bool      `json:"is_default"`   // whether it is a system default strategy
-	Config      string    `json:"config"`       // strategy configuration in JSON format
+	IsActive    bool      `json:"is_active"`  // whether it is active (a user can only have one active strategy)
+	IsDefault   bool      `json:"is_default"` // whether it is a system default strategy
+	Config      string    `json:"config"`     // strategy configuration in JSON format
 	CreatedAt   time.Time `json:"created_at"`
 	UpdatedAt   time.Time `json:"updated_at"`
 }
@@ -53,22 +55,10 @@ type PromptSectionsConfig struct {
 
 // CoinSourceConfig coin source configuration
 type CoinSourceConfig struct {
-	// source type: "static" | "coinpool" | "oi_top" | "mixed"
+	// source type: only "static" is supported
 	SourceType string `json:"source_type"`
-	// static coin list (used when source_type = "static")
+	// static coin list
 	StaticCoins []string `json:"static_coins,omitempty"`
-	// whether to use AI500 coin pool
-	UseCoinPool bool `json:"use_coin_pool"`
-	// AI500 coin pool maximum count
-	CoinPoolLimit int `json:"coin_pool_limit,omitempty"`
-	// AI500 coin pool API URL (strategy-level configuration)
-	CoinPoolAPIURL string `json:"coin_pool_api_url,omitempty"`
-	// whether to use OI Top
-	UseOITop bool `json:"use_oi_top"`
-	// OI Top maximum count
-	OITopLimit int `json:"oi_top_limit,omitempty"`
-	// OI Top API URL (strategy-level configuration)
-	OITopAPIURL string `json:"oi_top_api_url,omitempty"`
 }
 
 // IndicatorConfig indicator configuration
@@ -94,10 +84,10 @@ type IndicatorConfig struct {
 	// external data sources
 	ExternalDataSources []ExternalDataSource `json:"external_data_sources,omitempty"`
 	// quantitative data sources (capital flow, position changes, price changes)
-	EnableQuantData    bool   `json:"enable_quant_data"`              // whether to enable quantitative data
-	QuantDataAPIURL    string `json:"quant_data_api_url,omitempty"`   // quantitative data API address
-	EnableQuantOI      bool   `json:"enable_quant_oi"`                // whether to show OI data
-	EnableQuantNetflow bool   `json:"enable_quant_netflow"`           // whether to show Netflow data
+	EnableQuantData    bool   `json:"enable_quant_data"`            // whether to enable quantitative data
+	QuantDataAPIURL    string `json:"quant_data_api_url,omitempty"` // quantitative data API address
+	EnableQuantOI      bool   `json:"enable_quant_oi"`              // whether to show OI data
+	EnableQuantNetflow bool   `json:"enable_quant_netflow"`         // whether to show Netflow data
 	// OI ranking data (market-wide open interest increase/decrease rankings)
 	EnableOIRanking   bool   `json:"enable_oi_ranking"`             // whether to enable OI ranking data
 	OIRankingAPIURL   string `json:"oi_ranking_api_url,omitempty"`  // OI ranking API base URL
@@ -123,10 +113,10 @@ type KlineConfig struct {
 
 // ExternalDataSource external data source configuration
 type ExternalDataSource struct {
-	Name        string            `json:"name"`         // data source name
-	Type        string            `json:"type"`         // type: "api" | "webhook"
-	URL         string            `json:"url"`          // API URL
-	Method      string            `json:"method"`       // HTTP method
+	Name        string            `json:"name"`   // data source name
+	Type        string            `json:"type"`   // type: "api" | "webhook"
+	URL         string            `json:"url"`    // API URL
+	Method      string            `json:"method"` // HTTP method
 	Headers     map[string]string `json:"headers,omitempty"`
 	DataPath    string            `json:"data_path,omitempty"`    // JSON data path
 	RefreshSecs int               `json:"refresh_secs,omitempty"` // refresh interval (seconds)
@@ -151,6 +141,10 @@ type ExternalDataSource struct {
 //   - MinPositionSize: minimum position size in USDT (CODE ENFORCED)
 //   - MinRiskRewardRatio: min take_profit / stop_loss ratio (AI guided)
 //   - MinConfidence: min AI confidence to open position (AI guided)
+//
+// Order Execution:
+//   - OrderType: "market" or "limit" for opening positions
+//   - LimitPriceOffsetPct: limit order offset from current price in percent
 type RiskControlConfig struct {
 	// Max number of coins held simultaneously (CODE ENFORCED)
 	MaxPositions int `json:"max_positions"`
@@ -174,6 +168,11 @@ type RiskControlConfig struct {
 	MinRiskRewardRatio float64 `json:"min_risk_reward_ratio"`
 	// Min AI confidence to open position (AI guided)
 	MinConfidence int `json:"min_confidence"`
+
+	// Opening order type: "market" or "limit" (close orders remain market for safety)
+	OrderType string `json:"order_type,omitempty"`
+	// Limit order offset from current price in percent. Long uses below market, short uses above market.
+	LimitPriceOffsetPct float64 `json:"limit_price_offset_pct,omitempty"`
 }
 
 func (s *StrategyStore) initTables() error {
@@ -219,13 +218,8 @@ func (s *StrategyStore) initDefaultData() error {
 func GetDefaultStrategyConfig(lang string) StrategyConfig {
 	config := StrategyConfig{
 		CoinSource: CoinSourceConfig{
-			SourceType:     "coinpool",
-			UseCoinPool:    true,
-			CoinPoolLimit:  10,
-			CoinPoolAPIURL: "http://nofxaios.com:30006/api/ai500/list?auth=cm_568c67eae410d912c54c",
-			UseOITop:       false,
-			OITopLimit:     20,
-			OITopAPIURL:    "http://nofxaios.com:30006/api/oi/top-ranking?limit=20&duration=1h&auth=cm_568c67eae410d912c54c",
+			SourceType:  "static",
+			StaticCoins: append([]string(nil), defaultStaticCoins...),
 		},
 		Indicators: IndicatorConfig{
 			Klines: KlineConfig{
@@ -236,17 +230,17 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 				EnableMultiTimeframe: true,
 				SelectedTimeframes:   []string{"5m", "15m", "1h", "4h"},
 			},
-			EnableRawKlines:   true, // Required - raw OHLCV data for AI analysis
-			EnableEMA:         false,
-			EnableMACD:        false,
-			EnableRSI:         false,
-			EnableATR:         false,
-			EnableVolume:      true,
-			EnableOI:          true,
-			EnableFundingRate: true,
-			EMAPeriods:        []int{20, 50},
-			RSIPeriods:        []int{7, 14},
-			ATRPeriods:        []int{14},
+			EnableRawKlines:    true, // Required - raw OHLCV data for AI analysis
+			EnableEMA:          false,
+			EnableMACD:         false,
+			EnableRSI:          false,
+			EnableATR:          false,
+			EnableVolume:       true,
+			EnableOI:           true,
+			EnableFundingRate:  true,
+			EMAPeriods:         []int{20, 50},
+			RSIPeriods:         []int{7, 14},
+			ATRPeriods:         []int{14},
 			EnableQuantData:    true,
 			QuantDataAPIURL:    "http://nofxaios.com:30006/api/coin/{symbol}?include=netflow,oi,price&auth=cm_568c67eae410d912c54c",
 			EnableQuantOI:      true,
@@ -258,15 +252,17 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			OIRankingLimit:    10,
 		},
 		RiskControl: RiskControlConfig{
-			MaxPositions:                    3,   // Max 3 coins simultaneously (CODE ENFORCED)
-			BTCETHMaxLeverage:               5,   // BTC/ETH exchange leverage (AI guided)
-			AltcoinMaxLeverage:              5,   // Altcoin exchange leverage (AI guided)
-			BTCETHMaxPositionValueRatio:     5.0, // BTC/ETH: max position = 5x equity (CODE ENFORCED)
-			AltcoinMaxPositionValueRatio:    1.0, // Altcoin: max position = 1x equity (CODE ENFORCED)
-			MaxMarginUsage:                  0.9, // Max 90% margin usage (CODE ENFORCED)
-			MinPositionSize:                 12,  // Min 12 USDT per position (CODE ENFORCED)
-			MinRiskRewardRatio:              3.0, // Min 3:1 profit/loss ratio (AI guided)
-			MinConfidence:                   75,  // Min 75% confidence (AI guided)
+			MaxPositions:                 3,   // Max 3 coins simultaneously (CODE ENFORCED)
+			BTCETHMaxLeverage:            5,   // BTC/ETH exchange leverage (AI guided)
+			AltcoinMaxLeverage:           5,   // Altcoin exchange leverage (AI guided)
+			BTCETHMaxPositionValueRatio:  5.0, // BTC/ETH: max position = 5x equity (CODE ENFORCED)
+			AltcoinMaxPositionValueRatio: 1.0, // Altcoin: max position = 1x equity (CODE ENFORCED)
+			MaxMarginUsage:               0.9, // Max 90% margin usage (CODE ENFORCED)
+			MinPositionSize:              12,  // Min 12 USDT per position (CODE ENFORCED)
+			MinRiskRewardRatio:           3.0, // Min 3:1 profit/loss ratio (AI guided)
+			MinConfidence:                75,  // Min 75% confidence (AI guided)
+			OrderType:                    "market",
+			LimitPriceOffsetPct:          0.05,
 		},
 	}
 
@@ -500,11 +496,26 @@ func (s *Strategy) ParseConfig() (*StrategyConfig, error) {
 	if err := json.Unmarshal([]byte(s.Config), &config); err != nil {
 		return nil, fmt.Errorf("failed to parse strategy configuration: %w", err)
 	}
+	applyStrategyDefaults(&config)
 	return &config, nil
+}
+
+func applyStrategyDefaults(config *StrategyConfig) {
+	config.CoinSource.SourceType = "static"
+	if len(config.CoinSource.StaticCoins) == 0 {
+		config.CoinSource.StaticCoins = append([]string(nil), defaultStaticCoins...)
+	}
+	if config.RiskControl.OrderType == "" {
+		config.RiskControl.OrderType = "market"
+	}
+	if config.RiskControl.LimitPriceOffsetPct <= 0 {
+		config.RiskControl.LimitPriceOffsetPct = 0.05
+	}
 }
 
 // SetConfig set strategy configuration
 func (s *Strategy) SetConfig(config *StrategyConfig) error {
+	applyStrategyDefaults(config)
 	data, err := json.Marshal(config)
 	if err != nil {
 		return fmt.Errorf("failed to serialize strategy configuration: %w", err)

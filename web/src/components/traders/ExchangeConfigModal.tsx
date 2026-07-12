@@ -538,6 +538,41 @@ export function ExchangeConfigModal({
 
             {selectedTemplate && (
               <>
+                {(currentExchangeType === 'binance' ||
+                  currentExchangeType === 'hyperliquid' ||
+                  currentExchangeType === 'lighter') && (
+                  <div
+                    className="p-4 rounded"
+                    style={{
+                      background: testnet ? 'rgba(240, 185, 11, 0.10)' : '#0B0E11',
+                      border: `1px solid ${testnet ? 'rgba(240, 185, 11, 0.35)' : '#2B3139'}`,
+                    }}
+                  >
+                    <label className="flex items-center justify-between gap-4 cursor-pointer">
+                      <div>
+                        <div className="text-sm font-semibold" style={{ color: '#EAECEF' }}>
+                          {language === 'zh' ? '测试网环境' : 'Testnet Environment'}
+                        </div>
+                        <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
+                          {language === 'zh'
+                            ? currentExchangeType === 'binance'
+                              ? '启用后使用 Binance Futures Testnet，请填写测试网 API Key'
+                              : '启用后使用该交易所测试环境'
+                            : currentExchangeType === 'binance'
+                              ? 'Uses Binance Futures Testnet. Enter testnet API keys.'
+                              : 'Uses the exchange testnet environment.'}
+                        </div>
+                      </div>
+                      <input
+                        type="checkbox"
+                        checked={testnet}
+                        onChange={(e) => setTestnet(e.target.checked)}
+                        className="w-5 h-5 accent-yellow-500"
+                      />
+                    </label>
+                  </div>
+                )}
+
                 {/* Binance/Bybit/OKX/Bitget 的输入字段 */}
                 {(currentExchangeType === 'binance' ||
                   currentExchangeType === 'bybit' ||

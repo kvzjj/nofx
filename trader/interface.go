@@ -2,21 +2,42 @@ package trader
 
 import "time"
 
+// OrderType controls how opening orders are submitted.
+type OrderType string
+
+const (
+	OrderTypeMarket OrderType = "market"
+	OrderTypeLimit  OrderType = "limit"
+)
+
+// OrderOptions contains optional execution controls for opening orders.
+type OrderOptions struct {
+	Type       OrderType
+	LimitPrice float64
+}
+
+// AdvancedOrderTrader is implemented by exchanges that support configurable
+// order types for opening positions.
+type AdvancedOrderTrader interface {
+	OpenLongWithOptions(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error)
+	OpenShortWithOptions(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error)
+}
+
 // ClosedPnLRecord represents a single closed position record from exchange
 type ClosedPnLRecord struct {
-	Symbol       string    // Trading pair (e.g., "BTCUSDT")
-	Side         string    // "long" or "short"
-	EntryPrice   float64   // Entry price
-	ExitPrice    float64   // Exit/close price
-	Quantity     float64   // Position size
-	RealizedPnL  float64   // Realized profit/loss
-	Fee          float64   // Trading fee/commission
-	Leverage     int       // Leverage used
-	EntryTime    time.Time // Position open time
-	ExitTime     time.Time // Position close time
-	OrderID      string    // Close order ID
-	CloseType    string    // "manual", "stop_loss", "take_profit", "liquidation", "unknown"
-	ExchangeID   string    // Exchange-specific position ID
+	Symbol      string    // Trading pair (e.g., "BTCUSDT")
+	Side        string    // "long" or "short"
+	EntryPrice  float64   // Entry price
+	ExitPrice   float64   // Exit/close price
+	Quantity    float64   // Position size
+	RealizedPnL float64   // Realized profit/loss
+	Fee         float64   // Trading fee/commission
+	Leverage    int       // Leverage used
+	EntryTime   time.Time // Position open time
+	ExitTime    time.Time // Position close time
+	OrderID     string    // Close order ID
+	CloseType   string    // "manual", "stop_loss", "take_profit", "liquidation", "unknown"
+	ExchangeID  string    // Exchange-specific position ID
 }
 
 // TradeRecord represents a single trade/fill from exchange
