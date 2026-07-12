@@ -590,12 +590,12 @@ type MergedCoinPool struct {
 	SymbolSources map[string][]string // Source of each coin ("ai500"/"oi_top")
 }
 
-// OIRankingData OI ranking data for debate (includes both top and low)
+// OIRankingData OI ranking data including both top and low open-interest changes.
 type OIRankingData struct {
-	TimeRange    string       `json:"time_range"`     // e.g., "1小时"
-	Duration     string       `json:"duration"`       // e.g., "1h"
-	TopPositions []OIPosition `json:"top_positions"`  // 持仓增加排行
-	LowPositions []OIPosition `json:"low_positions"`  // 持仓减少排行
+	TimeRange    string       `json:"time_range"`    // e.g., "1小时"
+	Duration     string       `json:"duration"`      // e.g., "1h"
+	TopPositions []OIPosition `json:"top_positions"` // 持仓增加排行
+	LowPositions []OIPosition `json:"low_positions"` // 持仓减少排行
 	FetchedAt    time.Time    `json:"fetched_at"`
 }
 

@@ -860,7 +860,7 @@ func isBTCETHSymbol(symbol string) bool {
 	return strings.HasPrefix(symbol, "BTC") || strings.HasPrefix(symbol, "ETH")
 }
 
-// ExecuteDecision executes a trading decision from external sources (e.g., debate consensus)
+// ExecuteDecision executes a trading decision from external sources.
 // This is a public method that can be called by other modules
 func (at *AutoTrader) ExecuteDecision(d *decision.Decision) error {
 	logger.Infof("[%s] Executing external decision: %s %s", at.name, d.Action, d.Symbol)

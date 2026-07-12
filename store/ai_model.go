@@ -11,9 +11,9 @@ import (
 
 // AIModelStore AI model storage
 type AIModelStore struct {
-	db            *sql.DB
-	encryptFunc   func(string) string
-	decryptFunc   func(string) string
+	db          *sql.DB
+	encryptFunc func(string) string
+	decryptFunc func(string) string
 }
 
 // AIModel AI model configuration
@@ -163,7 +163,7 @@ func (s *AIModelStore) Get(userID, modelID string) (*AIModel, error) {
 	return nil, sql.ErrNoRows
 }
 
-// GetByID retrieves an AI model by ID only (for debate engine)
+// GetByID retrieves an AI model by ID only.
 func (s *AIModelStore) GetByID(modelID string) (*AIModel, error) {
 	if modelID == "" {
 		return nil, fmt.Errorf("model ID cannot be empty")

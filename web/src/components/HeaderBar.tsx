@@ -12,7 +12,6 @@ type Page =
   | 'trader'
   | 'backtest'
   | 'strategy'
-  | 'debate'
   | 'faq'
   | 'login'
   | 'register'
@@ -262,47 +261,6 @@ export default function HeaderBar({
                   )}
 
                   {t('strategyNav', language)}
-                </button>
-
-                <button
-                  onClick={() => {
-                    if (onPageChange) {
-                      onPageChange('debate')
-                    }
-                    navigate('/debate')
-                  }}
-                  className="text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500"
-                  style={{
-                    color:
-                      currentPage === 'debate'
-                        ? 'var(--brand-yellow)'
-                        : 'var(--brand-light-gray)',
-                    padding: '8px 16px',
-                    borderRadius: '8px',
-                    position: 'relative',
-                  }}
-                  onMouseEnter={(e) => {
-                    if (currentPage !== 'debate') {
-                      e.currentTarget.style.color = 'var(--brand-yellow)'
-                    }
-                  }}
-                  onMouseLeave={(e) => {
-                    if (currentPage !== 'debate') {
-                      e.currentTarget.style.color = 'var(--brand-light-gray)'
-                    }
-                  }}
-                >
-                  {currentPage === 'debate' && (
-                    <span
-                      className="absolute inset-0 rounded-lg"
-                      style={{
-                        background: 'rgba(240, 185, 11, 0.15)',
-                        zIndex: -1,
-                      }}
-                    />
-                  )}
-
-                  {t('debateNav', language)}
                 </button>
 
                 <button
@@ -925,40 +883,6 @@ export default function HeaderBar({
                 )}
 
                 {t('strategyNav', language)}
-              </button>
-              <button
-                onClick={() => {
-                  if (onPageChange) {
-                    onPageChange('debate')
-                  }
-                  navigate('/debate')
-                  setMobileMenuOpen(false)
-                }}
-                className="block text-sm font-bold transition-all duration-300 relative focus:outline-2 focus:outline-yellow-500 hover:text-yellow-500"
-                style={{
-                  color:
-                    currentPage === 'debate'
-                      ? 'var(--brand-yellow)'
-                      : 'var(--brand-light-gray)',
-                  padding: '12px 16px',
-                  borderRadius: '8px',
-                  position: 'relative',
-                  width: '100%',
-                  textAlign: 'left',
-                }}
-              >
-                {/* Background for selected state */}
-                {currentPage === 'debate' && (
-                  <span
-                    className="absolute inset-0 rounded-lg"
-                    style={{
-                      background: 'rgba(240, 185, 11, 0.15)',
-                      zIndex: -1,
-                    }}
-                  />
-                )}
-
-                {t('debateNav', language)}
               </button>
               <button
                 onClick={() => {
