@@ -117,7 +117,9 @@ type AutoTrader struct {
 	overrideBasePrompt    bool   // Whether to override base prompt
 	lastResetTime         time.Time
 	stopUntil             time.Time
+	lifecycleMutex        sync.Mutex
 	isRunning             bool
+	isStopping            bool
 	startTime             time.Time          // System start time
 	callCount             int                // AI call count
 	positionFirstSeenTime map[string]int64   // Position first seen time (symbol_side -> timestamp in milliseconds)
@@ -319,21 +321,55 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	}, nil
 }
 
-// Run runs the automatic trading main loop
+// Start atomically marks the trader as running before launching its main loop.
+func (at *AutoTrader) Start() error {
+	stopCh, err := at.beginRun()
+	if err != nil {
+		return err
+	}
+
+	go func() {
+		if err := at.run(stopCh); err != nil {
+			logger.Infof("❌ Trader %s runtime error: %v", at.GetName(), err)
+		}
+	}()
+	return nil
+}
+
+// Run runs the automatic trading main loop and blocks until it stops.
 func (at *AutoTrader) Run() error {
+	stopCh, err := at.beginRun()
+	if err != nil {
+		return err
+	}
+	return at.run(stopCh)
+}
+
+func (at *AutoTrader) beginRun() (chan struct{}, error) {
+	at.lifecycleMutex.Lock()
+	defer at.lifecycleMutex.Unlock()
+
+	if at.isRunning {
+		return nil, fmt.Errorf("trader %s is already running", at.id)
+	}
+
 	at.isRunning = true
+	at.isStopping = false
 	at.stopMonitorCh = make(chan struct{})
 	at.startTime = time.Now()
+	at.monitorWg.Add(1)
+	return at.stopMonitorCh, nil
+}
+
+func (at *AutoTrader) run(stopCh <-chan struct{}) error {
+	defer at.monitorWg.Done()
 
 	logger.Info("🚀 AI-driven automatic trading system started")
 	logger.Infof("💰 Initial balance: %.2f USDT", at.initialBalance)
 	logger.Infof("⚙️  Scan interval: %v", at.config.ScanInterval)
 	logger.Info("🤖 AI will make full decisions on leverage, position size, stop loss/take profit, etc.")
-	at.monitorWg.Add(1)
-	defer at.monitorWg.Done()
-
 	// Start drawdown monitoring
-	at.startDrawdownMonitor()
+	at.startDrawdownMonitor(stopCh)
 
 	ticker := time.NewTicker(at.config.ScanInterval)
 	defer ticker.Stop()
@@ -343,13 +379,13 @@ func (at *AutoTrader) Run() error {
 		logger.Infof("❌ Execution failed: %v", err)
 	}
 
-	for at.isRunning {
+	for {
 		select {
 		case <-ticker.C:
 			if err := at.runCycle(); err != nil {
 				logger.Infof("❌ Execution failed: %v", err)
 			}
-		case <-at.stopMonitorCh:
+		case <-stopCh:
 			logger.Infof("[%s] ⏹ Stop signal received, exiting automatic trading main loop", at.name)
 			return nil
 		}
@@ -360,13 +396,32 @@ func (at *AutoTrader) Run() error {
 
 // Stop stops the automatic trading
 func (at *AutoTrader) Stop() {
+	at.lifecycleMutex.Lock()
 	if !at.isRunning {
+		at.lifecycleMutex.Unlock()
 		return
 	}
-	at.isRunning = false
+	if at.isStopping {
+		at.lifecycleMutex.Unlock()
+		at.monitorWg.Wait()
+		return
+	}
+	at.isStopping = true
 	close(at.stopMonitorCh) // Notify monitoring goroutine to stop
-	at.monitorWg.Wait()     // Wait for monitoring goroutine to finish
+	at.lifecycleMutex.Unlock()
+	at.monitorWg.Wait() // Wait for monitoring goroutine to finish
+	at.lifecycleMutex.Lock()
+	at.isRunning = false
+	at.isStopping = false
+	at.lifecycleMutex.Unlock()
 	logger.Info("⏹ Automatic trading system stopped")
+}
+
+// IsRunning reports whether the trader has started and not yet been stopped.
+func (at *AutoTrader) IsRunning() bool {
+	at.lifecycleMutex.Lock()
+	defer at.lifecycleMutex.Unlock()
+	return at.isRunning
 }
 
 // runCycle runs one trading cycle (using AI full decision-making)
@@ -1306,6 +1361,11 @@ func (at *AutoTrader) GetStore() *store.Store {
 
 // GetStatus gets system status (for API)
 func (at *AutoTrader) GetStatus() map[string]interface{} {
+	at.lifecycleMutex.Lock()
+	isRunning := at.isRunning
+	startTime := at.startTime
+	at.lifecycleMutex.Unlock()
+
 	aiProvider := "DeepSeek"
 	if at.config.UseQwen {
 		aiProvider = "Qwen"
@@ -1316,9 +1376,9 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 		"trader_name":     at.name,
 		"ai_model":        at.aiModel,
 		"exchange":        at.exchange,
-		"is_running":      at.isRunning,
-		"start_time":      at.startTime.Format(time.RFC3339),
-		"runtime_minutes": int(time.Since(at.startTime).Minutes()),
+		"is_running":      isRunning,
+		"start_time":      startTime.Format(time.RFC3339),
+		"runtime_minutes": int(time.Since(startTime).Minutes()),
 		"call_count":      at.callCount,
 		"initial_balance": at.initialBalance,
 		"scan_interval":   at.config.ScanInterval.String(),
@@ -1552,7 +1612,7 @@ func sortDecisionsByPriority(decisions []decision.Decision) []decision.Decision 
 }
 
 // startDrawdownMonitor starts drawdown monitoring
-func (at *AutoTrader) startDrawdownMonitor() {
+func (at *AutoTrader) startDrawdownMonitor(stopCh <-chan struct{}) {
 	at.monitorWg.Add(1)
 	go func() {
 		defer at.monitorWg.Done()
@@ -1566,7 +1626,7 @@ func (at *AutoTrader) startDrawdownMonitor() {
 			select {
 			case <-ticker.C:
 				at.checkPositionDrawdown()
-			case <-at.stopMonitorCh:
+			case <-stopCh:
 				logger.Info("⏹ Stopped position drawdown monitoring")
 				return
 			}
@@ -1734,6 +1794,9 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 	if orderID == "" || orderID == "0" {
 		return
 	}
+	at.lifecycleMutex.Lock()
+	stopCh := at.stopMonitorCh
+	at.lifecycleMutex.Unlock()
 
 	go func() {
 		logger.Infof("  ⏳ Monitoring pending limit order %s for %s %s", orderID, symbol, action)
@@ -1744,7 +1807,7 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 
 		for {
 			select {
-			case <-at.stopMonitorCh:
+			case <-stopCh:
 				logger.Infof("  ⏹ Stop monitoring pending order %s because trader stopped", orderID)
 				return
 			case <-timeout.C:

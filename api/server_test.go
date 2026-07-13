@@ -203,6 +203,8 @@ func TestUpdateTraderRequest_CompleteFields(t *testing.T) {
 		"custom_prompt": "test",
 		"override_base_prompt": false,
 		"is_cross_margin": true,
+		"use_coin_pool": true,
+		"use_oi_top": false,
 		"system_prompt_template": "nof1"
 	}`
 
@@ -223,6 +225,47 @@ func TestUpdateTraderRequest_CompleteFields(t *testing.T) {
 	// Verify SystemPromptTemplate field has been correctly added to struct
 	if req.SystemPromptTemplate != "nof1" {
 		t.Errorf("SystemPromptTemplate mismatch: expected %q, got %q", "nof1", req.SystemPromptTemplate)
+	}
+	if req.TradingSymbols == nil || *req.TradingSymbols != "BTC,ETH" {
+		t.Errorf("TradingSymbols mismatch: expected %q, got %v", "BTC,ETH", req.TradingSymbols)
+	}
+	if req.CustomPrompt == nil || *req.CustomPrompt != "test" {
+		t.Errorf("CustomPrompt mismatch: expected %q, got %v", "test", req.CustomPrompt)
+	}
+	if req.OverrideBasePrompt == nil || *req.OverrideBasePrompt != false {
+		t.Errorf("OverrideBasePrompt mismatch: expected false, got %v", req.OverrideBasePrompt)
+	}
+	if req.UseCoinPool == nil || *req.UseCoinPool != true {
+		t.Errorf("UseCoinPool mismatch: expected true, got %v", req.UseCoinPool)
+	}
+	if req.UseOITop == nil || *req.UseOITop != false {
+		t.Errorf("UseOITop mismatch: expected false, got %v", req.UseOITop)
+	}
+}
+
+func TestUpdateTraderRequest_OptionalSignalSources(t *testing.T) {
+	var req UpdateTraderRequest
+	if err := json.Unmarshal([]byte(`{
+		"name": "Test Trader",
+		"ai_model_id": "gpt-4",
+		"exchange_id": "binance"
+	}`), &req); err != nil {
+		t.Fatalf("Failed to unmarshal JSON: %v", err)
+	}
+	if req.UseCoinPool != nil {
+		t.Errorf("UseCoinPool should be nil when omitted, got %v", *req.UseCoinPool)
+	}
+	if req.UseOITop != nil {
+		t.Errorf("UseOITop should be nil when omitted, got %v", *req.UseOITop)
+	}
+	if req.TradingSymbols != nil {
+		t.Errorf("TradingSymbols should be nil when omitted, got %v", *req.TradingSymbols)
+	}
+	if req.CustomPrompt != nil {
+		t.Errorf("CustomPrompt should be nil when omitted, got %v", *req.CustomPrompt)
+	}
+	if req.OverrideBasePrompt != nil {
+		t.Errorf("OverrideBasePrompt should be nil when omitted, got %v", *req.OverrideBasePrompt)
 	}
 }
 

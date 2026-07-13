@@ -636,12 +636,14 @@ type UpdateTraderRequest struct {
 	IsCrossMargin       *bool   `json:"is_cross_margin"`
 	ShowInCompetition   *bool   `json:"show_in_competition"`
 	// The following fields are kept for backward compatibility, new version uses strategy config
-	BTCETHLeverage       int    `json:"btc_eth_leverage"`
-	AltcoinLeverage      int    `json:"altcoin_leverage"`
-	TradingSymbols       string `json:"trading_symbols"`
-	CustomPrompt         string `json:"custom_prompt"`
-	OverrideBasePrompt   bool   `json:"override_base_prompt"`
-	SystemPromptTemplate string `json:"system_prompt_template"`
+	BTCETHLeverage       int     `json:"btc_eth_leverage"`
+	AltcoinLeverage      int     `json:"altcoin_leverage"`
+	TradingSymbols       *string `json:"trading_symbols"`
+	CustomPrompt         *string `json:"custom_prompt"`
+	OverrideBasePrompt   *bool   `json:"override_base_prompt"`
+	SystemPromptTemplate string  `json:"system_prompt_template"`
+	UseCoinPool          *bool   `json:"use_coin_pool"`
+	UseOITop             *bool   `json:"use_oi_top"`
 }
 
 // handleUpdateTrader Update trader configuration
@@ -686,6 +688,31 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		showInCompetition = *req.ShowInCompetition
 	}
 
+	useCoinPool := existingTrader.UseCoinPool // Keep original value
+	if req.UseCoinPool != nil {
+		useCoinPool = *req.UseCoinPool
+	}
+
+	useOITop := existingTrader.UseOITop // Keep original value
+	if req.UseOITop != nil {
+		useOITop = *req.UseOITop
+	}
+
+	tradingSymbols := existingTrader.TradingSymbols // Keep original value
+	if req.TradingSymbols != nil {
+		tradingSymbols = *req.TradingSymbols
+	}
+
+	customPrompt := existingTrader.CustomPrompt // Keep original value
+	if req.CustomPrompt != nil {
+		customPrompt = *req.CustomPrompt
+	}
+
+	overrideBasePrompt := existingTrader.OverrideBasePrompt // Keep original value
+	if req.OverrideBasePrompt != nil {
+		overrideBasePrompt = *req.OverrideBasePrompt
+	}
+
 	// Set leverage default values
 	btcEthLeverage := req.BTCETHLeverage
 	altcoinLeverage := req.AltcoinLeverage
@@ -727,9 +754,11 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		InitialBalance:       req.InitialBalance,
 		BTCETHLeverage:       btcEthLeverage,
 		AltcoinLeverage:      altcoinLeverage,
-		TradingSymbols:       req.TradingSymbols,
-		CustomPrompt:         req.CustomPrompt,
-		OverrideBasePrompt:   req.OverrideBasePrompt,
+		TradingSymbols:       tradingSymbols,
+		UseCoinPool:          useCoinPool,
+		UseOITop:             useOITop,
+		CustomPrompt:         customPrompt,
+		OverrideBasePrompt:   overrideBasePrompt,
 		SystemPromptTemplate: systemPromptTemplate,
 		IsCrossMargin:        isCrossMargin,
 		ShowInCompetition:    showInCompetition,
@@ -746,7 +775,9 @@ func (s *Server) handleUpdateTrader(c *gin.Context) {
 		return
 	}
 
-	// Remove old trader from memory first to ensure fresh config is loaded
+	// Stop and remove the old instance before reloading. A running trader keeps
+	// its database status, so the freshly loaded instance will restart once the
+	// old bot has fully exited.
 	s.traderManager.RemoveTrader(traderID)
 
 	// Reload traders into memory with fresh config
@@ -808,8 +839,7 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 	// Check if trader exists in memory and if it's running
 	existingTrader, _ := s.traderManager.GetTrader(traderID)
 	if existingTrader != nil {
-		status := existingTrader.GetStatus()
-		if isRunning, ok := status["is_running"].(bool); ok && isRunning {
+		if existingTrader.IsRunning() {
 			c.JSON(http.StatusBadRequest, gin.H{"error": "Trader is already running"})
 			return
 		}
@@ -859,13 +889,12 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 		return
 	}
 
-	// Start trader
-	go func() {
-		logger.Infof("▶️  Starting trader %s (%s)", traderID, trader.GetName())
-		if err := trader.Run(); err != nil {
-			logger.Infof("❌ Trader %s runtime error: %v", trader.GetName(), err)
-		}
-	}()
+	// Start atomically so another request cannot observe a not-yet-running bot.
+	logger.Infof("▶️  Starting trader %s (%s)", traderID, trader.GetName())
+	if err := trader.Start(); err != nil {
+		c.JSON(http.StatusConflict, gin.H{"error": err.Error()})
+		return
+	}
 
 	// Update running status in database
 	err = s.store.Trader().UpdateStatus(userID, traderID, true)
@@ -896,8 +925,7 @@ func (s *Server) handleStopTrader(c *gin.Context) {
 	}
 
 	// Check if trader is running
-	status := trader.GetStatus()
-	if isRunning, ok := status["is_running"].(bool); ok && !isRunning {
+	if !trader.IsRunning() {
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Trader is already stopped"})
 		return
 	}
