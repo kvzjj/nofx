@@ -1900,9 +1900,16 @@ func (s *Server) handleCompetition(c *gin.Context) {
 // handleEquityHistory Return rate historical data
 // Query directly from database, not dependent on trader in memory (so historical data can be retrieved after restart)
 func (s *Server) handleEquityHistory(c *gin.Context) {
-	_, traderID, err := s.getTraderFromQuery(c)
-	if err != nil {
-		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+	traderID := strings.TrimSpace(c.Query("trader_id"))
+	if traderID == "" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "trader_id is required"})
+		return
+	}
+
+	// This endpoint is public for competition charts, so it cannot use
+	// getTraderFromQuery, which requires an authenticated user context.
+	if _, err := s.store.Trader().GetByID(traderID); err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Trader does not exist"})
 		return
 	}
 

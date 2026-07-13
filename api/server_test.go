@@ -2,9 +2,11 @@ package api
 
 import (
 	"encoding/json"
+	"net/http"
 	"net/http/httptest"
 	"path/filepath"
 	"testing"
+	"time"
 
 	"nofx/manager"
 	"nofx/store"
@@ -67,6 +69,49 @@ func TestGetTraderFromQueryRejectsExplicitTraderWhenUserHasNoTraders(t *testing.
 	}
 	if err.Error() != "No available traders" {
 		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestHandleEquityHistoryAllowsPublicRequestWithTraderID(t *testing.T) {
+	s := newTestServerWithTraders(t, testTrader("public-trader", "owner"))
+	if err := s.store.Equity().Save(&store.EquitySnapshot{
+		TraderID:      "public-trader",
+		Timestamp:     time.Date(2026, 7, 13, 12, 0, 0, 0, time.UTC),
+		TotalEquity:   1050,
+		Balance:       1000,
+		UnrealizedPnL: 50,
+	}); err != nil {
+		t.Fatalf("save equity snapshot: %v", err)
+	}
+
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/equity-history?trader_id=public-trader", nil)
+
+	s.handleEquityHistory(c)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected public equity history request to succeed, got %d: %s", w.Code, w.Body.String())
+	}
+	var history []map[string]interface{}
+	if err := json.Unmarshal(w.Body.Bytes(), &history); err != nil {
+		t.Fatalf("decode equity history: %v", err)
+	}
+	if len(history) != 1 || history[0]["total_equity"] != 1050.0 {
+		t.Fatalf("unexpected equity history: %#v", history)
+	}
+}
+
+func TestHandleEquityHistoryRequiresTraderID(t *testing.T) {
+	s := newTestServerWithTraders(t, testTrader("public-trader", "owner"))
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	c.Request = httptest.NewRequest(http.MethodGet, "/api/equity-history", nil)
+
+	s.handleEquityHistory(c)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected missing trader_id to return 400, got %d: %s", w.Code, w.Body.String())
 	}
 }
 

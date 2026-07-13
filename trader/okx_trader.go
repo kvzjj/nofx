@@ -33,6 +33,8 @@ const (
 	okxCancelAlgoPath    = "/api/v5/trade/cancel-algos"
 	okxAlgoPendingPath   = "/api/v5/trade/orders-algo-pending"
 	okxPositionModePath  = "/api/v5/account/set-position-mode"
+	okxMaxGETAttempts    = 3
+	okxRetryBaseDelay    = 500 * time.Millisecond
 )
 
 // OKXTrader OKX futures trader
@@ -45,8 +47,9 @@ type OKXTrader struct {
 	// Margin mode setting
 	isCrossMargin bool
 
-	// HTTP client (proxy disabled)
+	// HTTP client
 	httpClient *http.Client
+	retryDelay time.Duration
 
 	// Balance cache
 	cachedBalance     map[string]interface{}
@@ -121,6 +124,7 @@ func NewOKXTraderWithTestnet(apiKey, secretKey, passphrase string, testnet bool)
 		passphrase:       passphrase,
 		testnet:          testnet,
 		httpClient:       httpClient,
+		retryDelay:       okxRetryBaseDelay,
 		cacheDuration:    15 * time.Second,
 		instrumentsCache: make(map[string]*OKXInstrument),
 	}
@@ -173,34 +177,64 @@ func (t *OKXTrader) doRequest(method, path string, body interface{}) ([]byte, er
 		}
 	}
 
-	timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
-	signature := t.sign(timestamp, method, path, string(bodyBytes))
-
-	req, err := http.NewRequest(method, okxBaseURL+path, bytes.NewReader(bodyBytes))
-	if err != nil {
-		return nil, fmt.Errorf("failed to create request: %w", err)
+	attempts := 1
+	if method == http.MethodGet {
+		attempts = okxMaxGETAttempts
 	}
 
-	req.Header.Set("OK-ACCESS-KEY", t.apiKey)
-	req.Header.Set("OK-ACCESS-SIGN", signature)
-	req.Header.Set("OK-ACCESS-TIMESTAMP", timestamp)
-	req.Header.Set("OK-ACCESS-PASSPHRASE", t.passphrase)
-	req.Header.Set("Content-Type", "application/json")
-	if t.testnet {
-		req.Header.Set("x-simulated-trading", "1")
-	} else {
-		req.Header.Set("x-simulated-trading", "0")
-	}
+	var respBody []byte
+	for attempt := 1; attempt <= attempts; attempt++ {
+		timestamp := time.Now().UTC().Format("2006-01-02T15:04:05.000Z")
+		signature := t.sign(timestamp, method, path, string(bodyBytes))
 
-	resp, err := t.httpClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("request failed: %w", err)
-	}
-	defer resp.Body.Close()
+		req, reqErr := http.NewRequest(method, okxBaseURL+path, bytes.NewReader(bodyBytes))
+		if reqErr != nil {
+			return nil, fmt.Errorf("failed to create request: %w", reqErr)
+		}
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		req.Header.Set("OK-ACCESS-KEY", t.apiKey)
+		req.Header.Set("OK-ACCESS-SIGN", signature)
+		req.Header.Set("OK-ACCESS-TIMESTAMP", timestamp)
+		req.Header.Set("OK-ACCESS-PASSPHRASE", t.passphrase)
+		req.Header.Set("Content-Type", "application/json")
+		if t.testnet {
+			req.Header.Set("x-simulated-trading", "1")
+		} else {
+			req.Header.Set("x-simulated-trading", "0")
+		}
+
+		resp, requestErr := t.httpClient.Do(req)
+		if requestErr != nil {
+			if attempt < attempts {
+				t.logOKXRetry(path, attempt, requestErr)
+				t.sleepBeforeRetry(attempt)
+				continue
+			}
+			return nil, fmt.Errorf("request failed after %d attempts: %w", attempt, requestErr)
+		}
+
+		respBody, err = io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			if attempt < attempts {
+				t.logOKXRetry(path, attempt, err)
+				t.sleepBeforeRetry(attempt)
+				continue
+			}
+			return nil, fmt.Errorf("failed to read response after %d attempts: %w", attempt, err)
+		}
+
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			break
+		}
+
+		statusErr := fmt.Errorf("HTTP %d %s: %s", resp.StatusCode, resp.Status, strings.TrimSpace(string(respBody)))
+		if attempt < attempts && isRetryableOKXStatus(resp.StatusCode) {
+			t.logOKXRetry(path, attempt, statusErr)
+			t.sleepBeforeRetry(attempt)
+			continue
+		}
+		return nil, statusErr
 	}
 
 	var okxResp OKXResponse
@@ -215,6 +249,22 @@ func (t *OKXTrader) doRequest(method, path string, body interface{}) ([]byte, er
 	}
 
 	return okxResp.Data, nil
+}
+
+func isRetryableOKXStatus(statusCode int) bool {
+	return statusCode == http.StatusTooManyRequests || statusCode >= http.StatusInternalServerError
+}
+
+func (t *OKXTrader) logOKXRetry(path string, attempt int, err error) {
+	logger.Infof("OKX request %s failed (attempt %d/%d): %v; retrying", path, attempt, okxMaxGETAttempts, err)
+}
+
+func (t *OKXTrader) sleepBeforeRetry(attempt int) {
+	delay := t.retryDelay
+	if delay <= 0 {
+		delay = okxRetryBaseDelay
+	}
+	time.Sleep(time.Duration(attempt) * delay)
 }
 
 // convertSymbol converts generic symbol to OKX format
@@ -362,12 +412,13 @@ func (t *OKXTrader) getPositions(forceFresh bool) ([]map[string]interface{}, err
 		// Convert symbol format
 		symbol := t.convertSymbolBack(pos.InstId)
 
-		// Determine direction and ensure contractCount is positive
+		// Determine direction and ensure contractCount is positive.
+		// In OKX net mode posSide is "net"; the sign of pos determines side.
 		side := "long"
-		if pos.PosSide == "short" {
+		if pos.PosSide == "short" || (pos.PosSide == "net" && contractCount < 0) {
 			side = "short"
 		}
-		// OKX short position's pos is negative, need to take absolute value
+		// OKX short/net-short position's pos is negative, need to take absolute value.
 		if contractCount < 0 {
 			contractCount = -contractCount
 		}
@@ -736,23 +787,20 @@ func (t *OKXTrader) CloseLong(symbol string, quantity float64) (map[string]inter
 
 	data, err := t.doRequest("POST", okxOrderPath, body)
 	if err != nil {
+		if isOKXPosSideError(err.Error()) {
+			return t.closeNetPosition(symbol, instId, "sell", szStr, "long")
+		}
 		return nil, fmt.Errorf("failed to close long position: %w", err)
 	}
 
-	var orders []struct {
-		OrdId string `json:"ordId"`
-		SCode string `json:"sCode"`
-		SMsg  string `json:"sMsg"`
-	}
-
-	if err := json.Unmarshal(data, &orders); err != nil {
+	ordID, msg, err := parseOKXOrderResult(data)
+	if err != nil {
 		return nil, err
 	}
 
-	if len(orders) == 0 || orders[0].SCode != "0" {
-		msg := "unknown error"
-		if len(orders) > 0 {
-			msg = orders[0].SMsg
+	if msg != "" {
+		if isOKXPosSideError(msg) {
+			return t.closeNetPosition(symbol, instId, "sell", szStr, "long")
 		}
 		return nil, fmt.Errorf("failed to close long position: %s", msg)
 	}
@@ -760,7 +808,7 @@ func (t *OKXTrader) CloseLong(symbol string, quantity float64) (map[string]inter
 	logger.Infof("✓ OKX submitted close-long order: %s", symbol)
 
 	return map[string]interface{}{
-		"orderId": orders[0].OrdId,
+		"orderId": ordID,
 		"symbol":  symbol,
 		"status":  "SUBMITTED",
 	}, nil
@@ -825,32 +873,93 @@ func (t *OKXTrader) CloseShort(symbol string, quantity float64) (map[string]inte
 
 	data, err := t.doRequest("POST", okxOrderPath, body)
 	if err != nil {
+		if isOKXPosSideError(err.Error()) {
+			return t.closeNetPosition(symbol, instId, "buy", szStr, "short")
+		}
 		return nil, fmt.Errorf("failed to close short position: %w", err)
 	}
 
-	var orders []struct {
-		OrdId string `json:"ordId"`
-		SCode string `json:"sCode"`
-		SMsg  string `json:"sMsg"`
-	}
-
-	if err := json.Unmarshal(data, &orders); err != nil {
+	ordID, msg, err := parseOKXOrderResult(data)
+	if err != nil {
 		return nil, err
 	}
 
-	if len(orders) == 0 || orders[0].SCode != "0" {
-		msg := "unknown error"
-		if len(orders) > 0 {
-			msg = fmt.Sprintf("sCode=%s, sMsg=%s", orders[0].SCode, orders[0].SMsg)
+	if msg != "" {
+		if isOKXPosSideError(msg) {
+			return t.closeNetPosition(symbol, instId, "buy", szStr, "short")
 		}
 		logger.Infof("❌ OKX failed to close short position: %s, response: %s", msg, string(data))
 		return nil, fmt.Errorf("failed to close short position: %s", msg)
 	}
 
-	logger.Infof("✓ OKX submitted close-short order: %s, ordId=%s", symbol, orders[0].OrdId)
+	logger.Infof("✓ OKX submitted close-short order: %s, ordId=%s", symbol, ordID)
 
 	return map[string]interface{}{
-		"orderId": orders[0].OrdId,
+		"orderId": ordID,
+		"symbol":  symbol,
+		"status":  "SUBMITTED",
+	}, nil
+}
+
+func isOKXPosSideError(msg string) bool {
+	lower := strings.ToLower(msg)
+	return strings.Contains(lower, "posside") ||
+		strings.Contains(lower, "pos side") ||
+		strings.Contains(lower, "position side")
+}
+
+func parseOKXOrderResult(data []byte) (string, string, error) {
+	var orders []struct {
+		OrdId string `json:"ordId"`
+		SCode string `json:"sCode"`
+		SMsg  string `json:"sMsg"`
+	}
+	if err := json.Unmarshal(data, &orders); err != nil {
+		return "", "", err
+	}
+	if len(orders) == 0 {
+		return "", "unknown error", nil
+	}
+	if orders[0].SCode != "0" {
+		msg := orders[0].SMsg
+		if msg == "" {
+			msg = fmt.Sprintf("sCode=%s", orders[0].SCode)
+		}
+		return "", msg, nil
+	}
+	return orders[0].OrdId, "", nil
+}
+
+func (t *OKXTrader) closeNetPosition(symbol, instId, side, size, positionLabel string) (map[string]interface{}, error) {
+	body := map[string]interface{}{
+		"instId":     instId,
+		"tdMode":     "cross",
+		"side":       side,
+		"posSide":    "net",
+		"ordType":    "market",
+		"sz":         size,
+		"reduceOnly": "true",
+		"clOrdId":    genOkxClOrdID(),
+		"tag":        okxTag,
+	}
+
+	logger.Infof("🔁 OKX retry close %s in net position mode: symbol=%s, side=%s, sz=%s", positionLabel, symbol, side, size)
+	data, err := t.doRequest("POST", okxOrderPath, body)
+	if err != nil {
+		return nil, fmt.Errorf("failed to close %s position in net mode: %w", positionLabel, err)
+	}
+
+	ordID, msg, err := parseOKXOrderResult(data)
+	if err != nil {
+		return nil, err
+	}
+	if msg != "" {
+		return nil, fmt.Errorf("failed to close %s position in net mode: %s", positionLabel, msg)
+	}
+
+	logger.Infof("✓ OKX submitted net-mode close-%s order: %s, ordId=%s", positionLabel, symbol, ordID)
+	return map[string]interface{}{
+		"orderId": ordID,
 		"symbol":  symbol,
 		"status":  "SUBMITTED",
 	}, nil
