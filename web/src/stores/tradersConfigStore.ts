@@ -2,6 +2,8 @@ import { create } from 'zustand'
 import type { AIModel, Exchange } from '../types'
 import { api } from '../lib/api'
 
+const SUPPORTED_EXCHANGE_TYPES = new Set(['binance', 'okx'])
+
 interface TradersConfigState {
   // 数据
   allModels: AIModel[]
@@ -60,15 +62,12 @@ export const useTradersConfigStore = create<TradersConfigState>((set, get) => ({
   },
 
   setAllExchanges: (exchanges) => {
-    set({ allExchanges: exchanges })
+    const supportedOnly = exchanges.filter((e) =>
+      SUPPORTED_EXCHANGE_TYPES.has((e.exchange_type || e.id).toLowerCase())
+    )
+    set({ allExchanges: supportedOnly })
     // 更新 configuredExchanges
-    const configuredExchanges = exchanges.filter((e) => {
-      if (e.id === 'aster') {
-        return e.asterUser && e.asterUser.trim() !== ''
-      }
-      if (e.id === 'hyperliquid') {
-        return e.hyperliquidWalletAddr && e.hyperliquidWalletAddr.trim() !== ''
-      }
+    const configuredExchanges = supportedOnly.filter((e) => {
       // 修复: 添加 enabled 判断,与原始逻辑保持一致
       return e.enabled || (e.apiKey && e.apiKey.trim() !== '')
     })
@@ -76,7 +75,12 @@ export const useTradersConfigStore = create<TradersConfigState>((set, get) => ({
   },
 
   setSupportedModels: (models) => set({ supportedModels: models }),
-  setSupportedExchanges: (exchanges) => set({ supportedExchanges: exchanges }),
+  setSupportedExchanges: (exchanges) =>
+    set({
+      supportedExchanges: exchanges.filter((e) =>
+        SUPPORTED_EXCHANGE_TYPES.has((e.exchange_type || e.id).toLowerCase())
+      ),
+    }),
   setUserSignalSource: (source) => {
     localStorage.setItem('coin_pool_url', source.coinPoolUrl)
     localStorage.setItem('oi_top_url', source.oiTopUrl)

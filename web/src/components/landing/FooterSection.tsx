@@ -30,9 +30,8 @@ export default function FooterSection({ language }: FooterSectionProps) {
       { name: 'Pull Requests', href: 'https://github.com/NoFxAiOS/nofx/pulls' },
     ],
     supporters: [
-      { name: 'Aster DEX', href: 'https://www.asterdex.com/en/referral/fdfc0e' },
       { name: 'Binance', href: 'https://www.maxweb.red/join?ref=NOFXAI' },
-      { name: 'Hyperliquid', href: 'https://hyperliquid.xyz/' },
+      { name: 'OKX', href: 'https://www.okx.com/join/1865360' },
       {
         name: 'Amber.ac',
         href: 'https://amber.ac/',

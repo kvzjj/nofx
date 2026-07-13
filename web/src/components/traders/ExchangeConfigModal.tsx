@@ -19,12 +19,7 @@ import { getShortName } from './utils'
 // Supported exchange templates for creating new accounts
 const SUPPORTED_EXCHANGE_TEMPLATES = [
   { exchange_type: 'binance', name: 'Binance Futures', type: 'cex' as const },
-  { exchange_type: 'bybit', name: 'Bybit Futures', type: 'cex' as const },
   { exchange_type: 'okx', name: 'OKX Futures', type: 'cex' as const },
-  { exchange_type: 'bitget', name: 'Bitget Futures', type: 'cex' as const },
-  { exchange_type: 'hyperliquid', name: 'Hyperliquid', type: 'dex' as const },
-  { exchange_type: 'aster', name: 'Aster DEX', type: 'dex' as const },
-  { exchange_type: 'lighter', name: 'Lighter', type: 'dex' as const },
 ]
 
 interface ExchangeConfigModalProps {
@@ -123,11 +118,6 @@ export function ExchangeConfigModal({
   const exchangeRegistrationLinks: Record<string, { url: string; hasReferral?: boolean }> = {
     binance: { url: 'https://www.binance.com/join?ref=NOFXENG', hasReferral: true },
     okx: { url: 'https://www.okx.com/join/1865360', hasReferral: true },
-    bybit: { url: 'https://partner.bybit.com/b/83856', hasReferral: true },
-    bitget: { url: 'https://www.bitget.com/referral/register?from=referral&clacCode=c8a43172', hasReferral: true },
-    hyperliquid: { url: 'https://app.hyperliquid.xyz/join/AITRADING', hasReferral: true },
-    aster: { url: 'https://www.asterdex.com/en/referral/fdfc0e', hasReferral: true },
-    lighter: { url: 'https://lighter.xyz', hasReferral: false },
   }
 
   // 如果是编辑现有交易所，初始化表单数据
@@ -284,59 +274,6 @@ export function ExchangeConfigModal({
       } else if (currentExchangeType === 'okx') {
         if (!apiKey.trim() || !secretKey.trim() || !passphrase.trim()) return
         await onSave(exchangeId, exchangeType, trimmedAccountName, apiKey.trim(), secretKey.trim(), passphrase.trim(), testnet)
-      } else if (currentExchangeType === 'bitget') {
-        if (!apiKey.trim() || !secretKey.trim() || !passphrase.trim()) return
-        await onSave(exchangeId, exchangeType, trimmedAccountName, apiKey.trim(), secretKey.trim(), passphrase.trim(), testnet)
-      } else if (currentExchangeType === 'hyperliquid') {
-        if (!apiKey.trim() || !hyperliquidWalletAddr.trim()) return // 验证私钥和钱包地址
-        await onSave(
-          exchangeId,
-          exchangeType,
-          trimmedAccountName,
-          apiKey.trim(),
-          '',
-          '',
-          testnet,
-          hyperliquidWalletAddr.trim()
-        )
-      } else if (currentExchangeType === 'aster') {
-        if (!asterUser.trim() || !asterSigner.trim() || !asterPrivateKey.trim())
-          return
-        await onSave(
-          exchangeId,
-          exchangeType,
-          trimmedAccountName,
-          '',
-          '',
-          '',
-          testnet,
-          undefined,
-          asterUser.trim(),
-          asterSigner.trim(),
-          asterPrivateKey.trim()
-        )
-      } else if (currentExchangeType === 'lighter') {
-        if (!lighterWalletAddr.trim() || !lighterPrivateKey.trim()) return
-        await onSave(
-          exchangeId,
-          exchangeType,
-          trimmedAccountName,
-          lighterPrivateKey.trim(),
-          '',
-          '',
-          testnet,
-          lighterWalletAddr.trim(),
-          undefined,
-          undefined,
-          undefined,
-          lighterWalletAddr.trim(),
-          lighterPrivateKey.trim(),
-          lighterApiKeyPrivateKey.trim()
-        )
-      } else {
-        // 默认情况（其他CEX交易所）
-        if (!apiKey.trim() || !secretKey.trim()) return
-        await onSave(exchangeId, exchangeType, trimmedAccountName, apiKey.trim(), secretKey.trim(), '', testnet)
       }
     } finally {
       setIsSaving(false)

@@ -488,10 +488,7 @@ func (d *Database) initDefaultData() error {
 		id, name, typ string
 	}{
 		{"binance", "Binance Futures", "binance"},
-		{"bybit", "Bybit Futures", "bybit"},
-		{"hyperliquid", "Hyperliquid", "hyperliquid"},
-		{"aster", "Aster DEX", "aster"},
-		{"lighter", "LIGHTER DEX", "lighter"},
+		{"okx", "OKX Futures", "okx"},
 	}
 
 	for _, exchange := range exchanges {
@@ -745,11 +742,11 @@ type ExchangeConfig struct {
 	AsterSigner     string `json:"asterSigner"`
 	AsterPrivateKey string `json:"asterPrivateKey"`
 	// LIGHTER 特定字段
-	LighterWalletAddr       string `json:"lighterWalletAddr"`       // Ethereum 钱包地址 (L1)
-	LighterPrivateKey       string `json:"lighterPrivateKey"`       // L1私钥（用于识别账户）
-	LighterAPIKeyPrivateKey string `json:"lighterAPIKeyPrivateKey"` // API Key私钥（40字节，用于签名交易）
-	CreatedAt          time.Time `json:"created_at"`
-	UpdatedAt          time.Time `json:"updated_at"`
+	LighterWalletAddr       string    `json:"lighterWalletAddr"`       // Ethereum 钱包地址 (L1)
+	LighterPrivateKey       string    `json:"lighterPrivateKey"`       // L1私钥（用于识别账户）
+	LighterAPIKeyPrivateKey string    `json:"lighterAPIKeyPrivateKey"` // API Key私钥（40字节，用于签名交易）
+	CreatedAt               time.Time `json:"created_at"`
+	UpdatedAt               time.Time `json:"updated_at"`
 }
 
 // TraderRecord 交易员配置（数据库实体）
@@ -1188,6 +1185,9 @@ func (d *Database) GetExchanges(userID string) ([]*ExchangeConfig, error) {
 // 🔒 安全特性：空值不会覆盖现有的敏感字段（api_key, secret_key, aster_private_key, lighter_private_key）
 func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secretKey string, testnet bool, hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey, lighterWalletAddr, lighterPrivateKey string) error {
 	log.Printf("🔧 UpdateExchange: userID=%s, id=%s, enabled=%v", userID, id, enabled)
+	if id != "binance" && id != "okx" {
+		return fmt.Errorf("unsupported exchange type: %s", id)
+	}
 
 	// 构建动态 UPDATE SET 子句
 	// 基础字段：总是更新
@@ -1261,18 +1261,9 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 		if id == "binance" {
 			name = "Binance Futures"
 			typ = "cex"
-		} else if id == "bybit" {
-			name = "Bybit Futures"
+		} else if id == "okx" {
+			name = "OKX Futures"
 			typ = "cex"
-		} else if id == "hyperliquid" {
-			name = "Hyperliquid"
-			typ = "dex"
-		} else if id == "aster" {
-			name = "Aster DEX"
-			typ = "dex"
-		} else if id == "lighter" {
-			name = "LIGHTER DEX"
-			typ = "dex"
 		} else {
 			name = id + " Exchange"
 			typ = "cex"

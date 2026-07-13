@@ -188,7 +188,7 @@ export default function HeroSection({ language }: HeroSectionProps) {
         >
           {[
             { label: 'GitHub Stars', value: `${(stars / 1000).toFixed(1)}K+` },
-            { label: language === 'zh' ? '支持交易所' : 'Exchanges', value: '5+' },
+            { label: language === 'zh' ? '支持交易所' : 'Exchanges', value: '2' },
             { label: language === 'zh' ? 'AI 模型' : 'AI Models', value: '10+' },
             { label: language === 'zh' ? '开源免费' : 'Open Source', value: '100%' },
           ].map((stat, index) => (

@@ -181,15 +181,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     }) || []
   const configuredExchanges =
     allExchanges?.filter((e) => {
-      // Aster 交易所检查特殊字段
-      if (e.id === 'aster') {
-        return e.asterUser && e.asterUser.trim() !== ''
-      }
-      // Hyperliquid 需要检查钱包地址（后端会返回这个字段）
-      if (e.id === 'hyperliquid') {
-        return e.hyperliquidWalletAddr && e.hyperliquidWalletAddr.trim() !== ''
-      }
-      // 其他交易所：如果已启用，说明已配置（后端返回的已配置交易所会有 enabled: true）
+      const exchangeType = (e.exchange_type || e.id).toLowerCase()
+      if (exchangeType !== 'binance' && exchangeType !== 'okx') return false
       return e.enabled
     }) || []
 
@@ -198,24 +191,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const enabledModels = allModels?.filter((m) => m.enabled) || []
   const enabledExchanges =
     allExchanges?.filter((e) => {
+      const exchangeType = (e.exchange_type || e.id).toLowerCase()
+      if (exchangeType !== 'binance' && exchangeType !== 'okx') return false
       if (!e.enabled) return false
-
-      // Aster 交易所需要特殊字段（后端会返回这些非敏感字段）
-      if (e.id === 'aster') {
-        return (
-          e.asterUser &&
-          e.asterUser.trim() !== '' &&
-          e.asterSigner &&
-          e.asterSigner.trim() !== ''
-        )
-      }
-
-      // Hyperliquid 需要钱包地址（后端会返回这个字段）
-      if (e.id === 'hyperliquid') {
-        return e.hyperliquidWalletAddr && e.hyperliquidWalletAddr.trim() !== ''
-      }
-
-      // 其他交易所：如果已启用，说明已配置完整（后端只返回已配置的交易所）
       return true
     }) || []
 

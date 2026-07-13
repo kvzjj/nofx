@@ -20,7 +20,7 @@ type ExchangeStore struct {
 // Exchange exchange configuration
 type Exchange struct {
 	ID                      string    `json:"id"`            // UUID
-	ExchangeType            string    `json:"exchange_type"` // "binance", "bybit", "okx", "hyperliquid", "aster", "lighter"
+	ExchangeType            string    `json:"exchange_type"` // "binance", "okx"
 	AccountName             string    `json:"account_name"`  // User-defined account name
 	UserID                  string    `json:"user_id"`
 	Name                    string    `json:"name"` // Display name (auto-generated or user-defined)
@@ -39,6 +39,17 @@ type Exchange struct {
 	LighterAPIKeyPrivateKey string    `json:"lighterAPIKeyPrivateKey"`
 	CreatedAt               time.Time `json:"created_at"`
 	UpdatedAt               time.Time `json:"updated_at"`
+}
+
+// IsSupportedExchangeType reports whether the exchange is currently exposed
+// for account configuration and trader execution.
+func IsSupportedExchangeType(exchangeType string) bool {
+	switch exchangeType {
+	case "binance", "okx":
+		return true
+	default:
+		return false
+	}
 }
 
 func (s *ExchangeStore) initTables() error {
@@ -135,11 +146,11 @@ func (s *ExchangeStore) migrateToMultiAccount() error {
 	defer rows.Close()
 
 	type oldRecord struct {
-		id, userID, name, typ                                                                             string
-		enabled, testnet                                                                                  bool
-		apiKey, secretKey, passphrase                                                                     string
-		hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey                                    string
-		lighterWalletAddr, lighterPrivateKey, lighterApiKeyPrivateKey                                     string
+		id, userID, name, typ                                          string
+		enabled, testnet                                               bool
+		apiKey, secretKey, passphrase                                  string
+		hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey string
+		lighterWalletAddr, lighterPrivateKey, lighterApiKeyPrivateKey  string
 	}
 
 	var records []oldRecord
@@ -231,7 +242,11 @@ func (s *ExchangeStore) List(userID string) ([]*Exchange, error) {
 		       COALESCE(lighter_private_key, '') as lighter_private_key,
 		       COALESCE(lighter_api_key_private_key, '') as lighter_api_key_private_key,
 		       created_at, updated_at
-		FROM exchanges WHERE user_id = ? ORDER BY exchange_type, account_name
+		FROM exchanges
+		WHERE user_id = ?
+		  AND (exchange_type IN ('binance', 'okx')
+		       OR (exchange_type = '' AND id IN ('binance', 'okx')))
+		ORDER BY exchange_type, account_name
 	`, userID)
 	if err != nil {
 		return nil, err
@@ -310,18 +325,8 @@ func getExchangeNameAndType(exchangeType string) (name string, typ string) {
 	switch exchangeType {
 	case "binance":
 		return "Binance Futures", "cex"
-	case "bybit":
-		return "Bybit Futures", "cex"
 	case "okx":
 		return "OKX Futures", "cex"
-	case "bitget":
-		return "Bitget Futures", "cex"
-	case "hyperliquid":
-		return "Hyperliquid", "dex"
-	case "aster":
-		return "Aster DEX", "dex"
-	case "lighter":
-		return "LIGHTER DEX", "dex"
 	default:
 		return exchangeType + " Exchange", "cex"
 	}
@@ -332,6 +337,10 @@ func (s *ExchangeStore) Create(userID, exchangeType, accountName string, enabled
 	apiKey, secretKey, passphrase string, testnet bool,
 	hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey,
 	lighterWalletAddr, lighterPrivateKey, lighterApiKeyPrivateKey string) (string, error) {
+
+	if !IsSupportedExchangeType(exchangeType) {
+		return "", fmt.Errorf("unsupported exchange type: %s", exchangeType)
+	}
 
 	id := uuid.New().String()
 	name, typ := getExchangeNameAndType(exchangeType)
@@ -453,7 +462,7 @@ func (s *ExchangeStore) CreateLegacy(userID, id, name, typ string, enabled bool,
 	hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey string) error {
 
 	// Check if this is an old-style ID (exchange type as ID)
-	if id == "binance" || id == "bybit" || id == "okx" || id == "bitget" || id == "hyperliquid" || id == "aster" || id == "lighter" {
+	if id == "binance" || id == "okx" {
 		// Use new Create method with exchange type
 		_, err := s.Create(userID, id, "Default", enabled, apiKey, secretKey, "", testnet,
 			hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey, "", "", "")

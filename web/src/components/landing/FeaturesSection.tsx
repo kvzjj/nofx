@@ -39,8 +39,8 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
       icon: Blocks,
       title: language === 'zh' ? '多交易所支持' : 'Multi-Exchange Support',
       desc: language === 'zh'
-        ? 'Binance、OKX、Bybit、Hyperliquid、Aster DEX，一套系统管理多个交易所'
-        : 'Binance, OKX, Bybit, Hyperliquid, Aster DEX - one system, multiple exchanges',
+        ? 'Binance 和 OKX，一套系统管理多个合约账户'
+        : 'Binance and OKX - one system, multiple futures accounts',
     },
     {
       icon: BarChart3,
@@ -171,7 +171,7 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
         >
           {[
             { value: '10+', label: language === 'zh' ? 'AI 模型支持' : 'AI Models' },
-            { value: '5+', label: language === 'zh' ? '交易所集成' : 'Exchanges' },
+            { value: '2', label: language === 'zh' ? '交易所集成' : 'Exchanges' },
             { value: '24/7', label: language === 'zh' ? '自动交易' : 'Auto Trading' },
             { value: '100%', label: language === 'zh' ? '开源免费' : 'Open Source' },
           ].map((stat) => (

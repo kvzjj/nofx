@@ -226,7 +226,6 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 
 	// Create corresponding trader based on configuration
 	var trader Trader
-	var err error
 
 	// Record position mode (general)
 	marginModeStr := "Cross Margin"
@@ -239,50 +238,9 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	case "binance":
 		logger.Infof("🏦 [%s] Using Binance Futures trading (testnet=%v)", config.Name, config.BinanceTestnet)
 		trader = NewFuturesTraderWithTestnet(config.BinanceAPIKey, config.BinanceSecretKey, userID, config.BinanceTestnet)
-	case "bybit":
-		logger.Infof("🏦 [%s] Using Bybit Futures trading", config.Name)
-		trader = NewBybitTrader(config.BybitAPIKey, config.BybitSecretKey)
 	case "okx":
 		logger.Infof("🏦 [%s] Using OKX Futures trading (testnet=%v)", config.Name, config.OKXTestnet)
 		trader = NewOKXTraderWithTestnet(config.OKXAPIKey, config.OKXSecretKey, config.OKXPassphrase, config.OKXTestnet)
-	case "bitget":
-		logger.Infof("🏦 [%s] Using Bitget Futures trading", config.Name)
-		trader = NewBitgetTrader(config.BitgetAPIKey, config.BitgetSecretKey, config.BitgetPassphrase)
-	case "hyperliquid":
-		logger.Infof("🏦 [%s] Using Hyperliquid trading", config.Name)
-		trader, err = NewHyperliquidTrader(config.HyperliquidPrivateKey, config.HyperliquidWalletAddr, config.HyperliquidTestnet)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize Hyperliquid trader: %w", err)
-		}
-	case "aster":
-		logger.Infof("🏦 [%s] Using Aster trading", config.Name)
-		trader, err = NewAsterTrader(config.AsterUser, config.AsterSigner, config.AsterPrivateKey)
-		if err != nil {
-			return nil, fmt.Errorf("failed to initialize Aster trader: %w", err)
-		}
-	case "lighter":
-		logger.Infof("🏦 [%s] Using LIGHTER trading", config.Name)
-
-		// Prefer V2 (requires API Key)
-		if config.LighterAPIKeyPrivateKey != "" {
-			logger.Infof("✓ Using LIGHTER SDK (V2) - Full signature support")
-			trader, err = NewLighterTraderV2(
-				config.LighterPrivateKey,
-				config.LighterWalletAddr,
-				config.LighterAPIKeyPrivateKey,
-				config.LighterTestnet,
-			)
-			if err != nil {
-				return nil, fmt.Errorf("failed to initialize LIGHTER trader (V2): %w", err)
-			}
-		} else {
-			// Fallback to V1 (basic HTTP implementation)
-			logger.Infof("⚠️  Using LIGHTER basic implementation (V1) - Limited functionality, please configure API Key")
-			trader, err = NewLighterTrader(config.LighterPrivateKey, config.LighterWalletAddr, config.LighterTestnet)
-			if err != nil {
-				return nil, fmt.Errorf("failed to initialize LIGHTER trader (V1): %w", err)
-			}
-		}
 	default:
 		return nil, fmt.Errorf("unsupported trading platform: %s", config.Exchange)
 	}

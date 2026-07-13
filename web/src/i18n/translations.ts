@@ -672,9 +672,9 @@ export const translations = {
     heroTitle1: 'Read the Market.',
     heroTitle2: 'Write the Trade.',
     heroDescription:
-      'NOFX is the future standard for AI trading — an open, community-driven agentic trading OS. Supporting Binance, Aster DEX and other exchanges, self-hosted, multi-agent competition, let AI automatically make decisions, execute and optimize trades for you.',
+      'NOFX is the future standard for AI trading — an open, community-driven agentic trading OS. Supporting Binance and OKX, self-hosted, multi-agent competition, let AI automatically make decisions, execute and optimize trades for you.',
     poweredBy:
-      'Powered by Aster DEX and Binance, strategically invested by Amber.ac.',
+      'Powered by Binance and OKX, strategically invested by Amber.ac.',
 
     // Landing Page CTA
     readyToDefine: 'Ready to define the future of AI trading?',
@@ -740,7 +740,7 @@ export const translations = {
       'git clone https://github.com/tinkle-community/nofx and switch to dev branch to test new features.',
     step2Title: 'Configure Environment',
     step2Desc:
-      'Frontend setup for exchange APIs (like Binance, Hyperliquid), AI models and custom prompts.',
+      'Frontend setup for exchange APIs (Binance and OKX), AI models and custom prompts.',
     step3Title: 'Deploy & Run',
     step3Desc:
       'One-click Docker deployment, start AI agents. Note: High-risk market, only test with money you can afford to lose.',
@@ -808,7 +808,7 @@ export const translations = {
 
     faqSupportedExchanges: 'Which exchanges are supported?',
     faqSupportedExchangesAnswer:
-      'Binance Futures, Hyperliquid, and Aster DEX are supported. More exchanges coming soon.',
+      'Binance Futures and OKX Futures are supported.',
 
     faqIsProfitable: 'Is NOFX profitable?',
     faqIsProfitableAnswer:
@@ -838,7 +838,7 @@ export const translations = {
 
     faqGetApiKeys: 'How do I get API keys?',
     faqGetApiKeysAnswer:
-      'For Binance: Account → API Management → Create API → Enable Futures. For Hyperliquid: Visit Hyperliquid App → API Settings. For Aster DEX: Configure main wallet address (User), API wallet address (Signer), and private key (Private Key).',
+      'For Binance: Account → API Management → Create API → Enable Futures. For OKX: create an API key with futures trading permissions and keep the passphrase.',
 
     faqUseSubaccount: 'Should I use a subaccount?',
     faqUseSubaccountAnswer:
@@ -1652,8 +1652,8 @@ export const translations = {
     heroTitle1: 'Read the Market.',
     heroTitle2: 'Write the Trade.',
     heroDescription:
-      'NOFX 是 AI 交易的未来标准——一个开放、社区驱动的代理式交易操作系统。支持 Binance、Aster DEX 等交易所，自托管、多代理竞争，让 AI 为你自动决策、执行和优化交易。',
-    poweredBy: '由 Aster DEX 和 Binance 提供支持，Amber.ac 战略投资。',
+      'NOFX 是 AI 交易的未来标准——一个开放、社区驱动的代理式交易操作系统。支持 Binance 和 OKX，自托管、多代理竞争，让 AI 为你自动决策、执行和优化交易。',
+    poweredBy: '由 Binance 和 OKX 提供支持，Amber.ac 战略投资。',
 
     // Landing Page CTA
     readyToDefine: '准备好定义 AI 交易的未来吗？',
@@ -1710,7 +1710,7 @@ export const translations = {
       'git clone https://github.com/tinkle-community/nofx 并切换到 dev 分支测试新功能。',
     step2Title: '配置环境',
     step2Desc:
-      '前端设置交易所 API（如 Binance、Hyperliquid）、AI 模型和自定义提示词。',
+      '前端设置交易所 API（Binance 和 OKX）、AI 模型和自定义提示词。',
     step3Title: '部署与运行',
     step3Desc:
       '一键 Docker 部署，启动 AI 代理。注意：高风险市场，仅用闲钱测试。',
@@ -1773,7 +1773,7 @@ export const translations = {
 
     faqSupportedExchanges: '支持哪些交易所？',
     faqSupportedExchangesAnswer:
-      '支持币安合约（Binance Futures）、Hyperliquid 和 Aster DEX。更多交易所开发中。',
+      '支持币安合约（Binance Futures）和 OKX Futures。',
 
     faqIsProfitable: 'NOFX 能盈利吗？',
     faqIsProfitableAnswer:
@@ -1803,7 +1803,7 @@ export const translations = {
 
     faqGetApiKeys: '如何获取 API 密钥？',
     faqGetApiKeysAnswer:
-      '币安：账户 → API 管理 → 创建 API → 启用合约。Hyperliquid：访问 Hyperliquid App → API 设置。Aster DEX：配置主钱包地址（User）、API 钱包地址（Signer）和私钥（Private Key）。',
+      '币安：账户 → API 管理 → 创建 API → 启用合约。OKX：创建具备合约交易权限的 API Key，并保存 Passphrase。',
 
     faqUseSubaccount: '应该使用子账户吗？',
     faqUseSubaccountAnswer:

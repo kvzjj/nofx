@@ -397,7 +397,7 @@ type ExchangeConfig struct {
 // SafeExchangeConfig Safe exchange configuration structure (does not contain sensitive information)
 type SafeExchangeConfig struct {
 	ID                    string `json:"id"`            // UUID
-	ExchangeType          string `json:"exchange_type"` // "binance", "bybit", "okx", "hyperliquid", "aster", "lighter"
+	ExchangeType          string `json:"exchange_type"` // "binance", "okx"
 	AccountName           string `json:"account_name"`  // User-defined account name
 	Name                  string `json:"name"`          // Display name
 	Type                  string `json:"type"`          // "cex" or "dex"
@@ -535,23 +535,6 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 		switch exchangeCfg.ExchangeType {
 		case "binance":
 			tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey, userID)
-		case "hyperliquid":
-			tempTrader, createErr = trader.NewHyperliquidTrader(
-				exchangeCfg.APIKey, // private key
-				exchangeCfg.HyperliquidWalletAddr,
-				exchangeCfg.Testnet,
-			)
-		case "aster":
-			tempTrader, createErr = trader.NewAsterTrader(
-				exchangeCfg.AsterUser,
-				exchangeCfg.AsterSigner,
-				exchangeCfg.AsterPrivateKey,
-			)
-		case "bybit":
-			tempTrader = trader.NewBybitTrader(
-				exchangeCfg.APIKey,
-				exchangeCfg.SecretKey,
-			)
 		case "okx":
 			tempTrader = trader.NewOKXTraderWithTestnet(
 				exchangeCfg.APIKey,
@@ -559,27 +542,6 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 				exchangeCfg.Passphrase,
 				exchangeCfg.Testnet,
 			)
-		case "bitget":
-			tempTrader = trader.NewBitgetTrader(
-				exchangeCfg.APIKey,
-				exchangeCfg.SecretKey,
-				exchangeCfg.Passphrase,
-			)
-		case "lighter":
-			if exchangeCfg.LighterAPIKeyPrivateKey != "" {
-				tempTrader, createErr = trader.NewLighterTraderV2(
-					exchangeCfg.LighterPrivateKey,
-					exchangeCfg.LighterWalletAddr,
-					exchangeCfg.LighterAPIKeyPrivateKey,
-					exchangeCfg.Testnet,
-				)
-			} else {
-				tempTrader, createErr = trader.NewLighterTrader(
-					exchangeCfg.LighterPrivateKey,
-					exchangeCfg.LighterWalletAddr,
-					exchangeCfg.Testnet,
-				)
-			}
 		default:
 			logger.Infof("⚠️ Unsupported exchange type: %s, using user input for initial balance", exchangeCfg.ExchangeType)
 		}
@@ -1053,23 +1015,6 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 	switch exchangeCfg.ExchangeType {
 	case "binance":
 		tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey, userID)
-	case "hyperliquid":
-		tempTrader, createErr = trader.NewHyperliquidTrader(
-			exchangeCfg.APIKey,
-			exchangeCfg.HyperliquidWalletAddr,
-			exchangeCfg.Testnet,
-		)
-	case "aster":
-		tempTrader, createErr = trader.NewAsterTrader(
-			exchangeCfg.AsterUser,
-			exchangeCfg.AsterSigner,
-			exchangeCfg.AsterPrivateKey,
-		)
-	case "bybit":
-		tempTrader = trader.NewBybitTrader(
-			exchangeCfg.APIKey,
-			exchangeCfg.SecretKey,
-		)
 	case "okx":
 		tempTrader = trader.NewOKXTraderWithTestnet(
 			exchangeCfg.APIKey,
@@ -1077,27 +1022,6 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 			exchangeCfg.Passphrase,
 			exchangeCfg.Testnet,
 		)
-	case "bitget":
-		tempTrader = trader.NewBitgetTrader(
-			exchangeCfg.APIKey,
-			exchangeCfg.SecretKey,
-			exchangeCfg.Passphrase,
-		)
-	case "lighter":
-		if exchangeCfg.LighterAPIKeyPrivateKey != "" {
-			tempTrader, createErr = trader.NewLighterTraderV2(
-				exchangeCfg.LighterPrivateKey,
-				exchangeCfg.LighterWalletAddr,
-				exchangeCfg.LighterAPIKeyPrivateKey,
-				exchangeCfg.Testnet,
-			)
-		} else {
-			tempTrader, createErr = trader.NewLighterTrader(
-				exchangeCfg.LighterPrivateKey,
-				exchangeCfg.LighterWalletAddr,
-				exchangeCfg.Testnet,
-			)
-		}
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported exchange type"})
 		return
@@ -1208,23 +1132,6 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 	switch exchangeCfg.ExchangeType {
 	case "binance":
 		tempTrader = trader.NewFuturesTrader(exchangeCfg.APIKey, exchangeCfg.SecretKey, userID)
-	case "hyperliquid":
-		tempTrader, createErr = trader.NewHyperliquidTrader(
-			exchangeCfg.APIKey,
-			exchangeCfg.HyperliquidWalletAddr,
-			exchangeCfg.Testnet,
-		)
-	case "aster":
-		tempTrader, createErr = trader.NewAsterTrader(
-			exchangeCfg.AsterUser,
-			exchangeCfg.AsterSigner,
-			exchangeCfg.AsterPrivateKey,
-		)
-	case "bybit":
-		tempTrader = trader.NewBybitTrader(
-			exchangeCfg.APIKey,
-			exchangeCfg.SecretKey,
-		)
 	case "okx":
 		tempTrader = trader.NewOKXTraderWithTestnet(
 			exchangeCfg.APIKey,
@@ -1232,27 +1139,6 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 			exchangeCfg.Passphrase,
 			exchangeCfg.Testnet,
 		)
-	case "bitget":
-		tempTrader = trader.NewBitgetTrader(
-			exchangeCfg.APIKey,
-			exchangeCfg.SecretKey,
-			exchangeCfg.Passphrase,
-		)
-	case "lighter":
-		if exchangeCfg.LighterAPIKeyPrivateKey != "" {
-			tempTrader, createErr = trader.NewLighterTraderV2(
-				exchangeCfg.LighterPrivateKey,
-				exchangeCfg.LighterWalletAddr,
-				exchangeCfg.LighterAPIKeyPrivateKey,
-				exchangeCfg.Testnet,
-			)
-		} else {
-			tempTrader, createErr = trader.NewLighterTrader(
-				exchangeCfg.LighterPrivateKey,
-				exchangeCfg.LighterWalletAddr,
-				exchangeCfg.Testnet,
-			)
-		}
 	default:
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Unsupported exchange type"})
 		return
@@ -1520,7 +1406,17 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 
 	// Update each exchange's configuration
 	for exchangeID, exchangeData := range req.Exchanges {
-		err := s.store.Exchange().Update(userID, exchangeID, exchangeData.Enabled, exchangeData.APIKey, exchangeData.SecretKey, exchangeData.Passphrase, exchangeData.Testnet, exchangeData.HyperliquidWalletAddr, exchangeData.AsterUser, exchangeData.AsterSigner, exchangeData.AsterPrivateKey, exchangeData.LighterWalletAddr, exchangeData.LighterPrivateKey, exchangeData.LighterAPIKeyPrivateKey)
+		exchange, err := s.store.Exchange().GetByID(userID, exchangeID)
+		if err != nil {
+			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get exchange %s: %v", exchangeID, err)})
+			return
+		}
+		if !store.IsSupportedExchangeType(exchange.ExchangeType) {
+			c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Unsupported exchange type: %s", exchange.ExchangeType)})
+			return
+		}
+
+		err = s.store.Exchange().Update(userID, exchangeID, exchangeData.Enabled, exchangeData.APIKey, exchangeData.SecretKey, exchangeData.Passphrase, exchangeData.Testnet, exchangeData.HyperliquidWalletAddr, exchangeData.AsterUser, exchangeData.AsterSigner, exchangeData.AsterPrivateKey, exchangeData.LighterWalletAddr, exchangeData.LighterPrivateKey, exchangeData.LighterAPIKeyPrivateKey)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to update exchange %s: %v", exchangeID, err)})
 			return
@@ -1540,7 +1436,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 
 // CreateExchangeRequest request structure for creating a new exchange account
 type CreateExchangeRequest struct {
-	ExchangeType            string `json:"exchange_type" binding:"required"` // "binance", "bybit", "okx", "hyperliquid", "aster", "lighter"
+	ExchangeType            string `json:"exchange_type" binding:"required"` // "binance", "okx"
 	AccountName             string `json:"account_name"`                     // User-defined account name
 	Enabled                 bool   `json:"enabled"`
 	APIKey                  string `json:"api_key"`
@@ -1608,11 +1504,7 @@ func (s *Server) handleCreateExchange(c *gin.Context) {
 	}
 
 	// Validate exchange type
-	validTypes := map[string]bool{
-		"binance": true, "bybit": true, "okx": true, "bitget": true,
-		"hyperliquid": true, "aster": true, "lighter": true,
-	}
-	if !validTypes[req.ExchangeType] {
+	if !store.IsSupportedExchangeType(req.ExchangeType) {
 		c.JSON(http.StatusBadRequest, gin.H{"error": fmt.Sprintf("Invalid exchange type: %s", req.ExchangeType)})
 		return
 	}
@@ -2403,11 +2295,7 @@ func (s *Server) handleGetSupportedExchanges(c *gin.Context) {
 	// Note: ID is empty for supported exchanges (they are templates, not actual accounts)
 	supportedExchanges := []SafeExchangeConfig{
 		{ExchangeType: "binance", Name: "Binance Futures", Type: "cex"},
-		{ExchangeType: "bybit", Name: "Bybit Futures", Type: "cex"},
 		{ExchangeType: "okx", Name: "OKX Futures", Type: "cex"},
-		{ExchangeType: "hyperliquid", Name: "Hyperliquid", Type: "dex"},
-		{ExchangeType: "aster", Name: "Aster DEX", Type: "dex"},
-		{ExchangeType: "lighter", Name: "LIGHTER DEX", Type: "dex"},
 	}
 
 	c.JSON(http.StatusOK, supportedExchanges)

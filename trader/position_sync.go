@@ -494,31 +494,8 @@ func (m *PositionSyncManager) createTrader(config *store.TraderFullConfig) (Trad
 	case "binance":
 		return NewFuturesTrader(exchange.APIKey, exchange.SecretKey, config.Trader.UserID), nil
 
-	case "bybit":
-		return NewBybitTrader(exchange.APIKey, exchange.SecretKey), nil
-
 	case "okx":
 		return NewOKXTraderWithTestnet(exchange.APIKey, exchange.SecretKey, exchange.Passphrase, exchange.Testnet), nil
-
-	case "bitget":
-		return NewBitgetTrader(exchange.APIKey, exchange.SecretKey, exchange.Passphrase), nil
-
-	case "hyperliquid":
-		return NewHyperliquidTrader(exchange.SecretKey, exchange.HyperliquidWalletAddr, exchange.Testnet)
-
-	case "aster":
-		return NewAsterTrader(exchange.AsterUser, exchange.AsterSigner, exchange.AsterPrivateKey)
-
-	case "lighter":
-		if exchange.LighterAPIKeyPrivateKey != "" {
-			return NewLighterTraderV2(
-				exchange.LighterPrivateKey,
-				exchange.LighterWalletAddr,
-				exchange.LighterAPIKeyPrivateKey,
-				exchange.Testnet,
-			)
-		}
-		return NewLighterTrader(exchange.LighterPrivateKey, exchange.LighterWalletAddr, exchange.Testnet)
 
 	default:
 		return nil, fmt.Errorf("unsupported exchange type: %s", exchange.ExchangeType)
@@ -697,17 +674,12 @@ func (m *PositionSyncManager) syncExternalPositions(traderID, exchangeID, exchan
 }
 
 // syncClosedPositionsHistory syncs closed positions from exchange history
-// IMPORTANT: Only exchanges with position-level history API should sync history:
-// - Bybit: /v5/position/closed-pnl (accurate position records)
-// - OKX: /api/v5/account/positions-history (accurate position records)
-// Other exchanges (Binance, Hyperliquid, Lighter, Aster) only have trade-level data,
-// which cannot accurately reconstruct positions. They should NOT sync historical positions.
+// IMPORTANT: Only exchanges with position-level history API should sync history.
+// Binance only has trade-level data, which cannot accurately reconstruct positions.
 func (m *PositionSyncManager) syncClosedPositionsHistory(traderID, exchangeID, exchangeType string, trader Trader) {
 	// Only sync history for exchanges with position-level API
-	// Binance/Hyperliquid/Lighter/Aster only have trade-level data, skip history sync
 	switch exchangeType {
-	case "bybit", "okx":
-		// These exchanges have position-level history API, proceed with sync
+	case "okx":
 	default:
 		// Other exchanges don't have accurate position history API
 		// Their GetClosedPnL only returns recent trades for closure detection, not for history sync

@@ -608,7 +608,7 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 		ID:                    traderCfg.ID,
 		Name:                  traderCfg.Name,
 		AIModel:               aiModelCfg.Provider,
-		Exchange:              exchangeCfg.ExchangeType, // Exchange type: binance/bybit/okx/etc
+		Exchange:              exchangeCfg.ExchangeType, // Exchange type: binance/okx
 		ExchangeID:            exchangeCfg.ID,           // Exchange account UUID (for multi-account)
 		BinanceAPIKey:         "",
 		BinanceSecretKey:      "",
@@ -634,29 +634,13 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 	case "binance":
 		traderConfig.BinanceAPIKey = exchangeCfg.APIKey
 		traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
-	case "bybit":
-		traderConfig.BybitAPIKey = exchangeCfg.APIKey
-		traderConfig.BybitSecretKey = exchangeCfg.SecretKey
 	case "okx":
 		traderConfig.OKXAPIKey = exchangeCfg.APIKey
 		traderConfig.OKXSecretKey = exchangeCfg.SecretKey
 		traderConfig.OKXPassphrase = exchangeCfg.Passphrase
 		traderConfig.OKXTestnet = exchangeCfg.Testnet
-	case "bitget":
-		traderConfig.BitgetAPIKey = exchangeCfg.APIKey
-		traderConfig.BitgetSecretKey = exchangeCfg.SecretKey
-		traderConfig.BitgetPassphrase = exchangeCfg.Passphrase
-	case "hyperliquid":
-		traderConfig.HyperliquidPrivateKey = exchangeCfg.APIKey
-		traderConfig.HyperliquidWalletAddr = exchangeCfg.HyperliquidWalletAddr
-	case "aster":
-		traderConfig.AsterUser = exchangeCfg.AsterUser
-		traderConfig.AsterSigner = exchangeCfg.AsterSigner
-		traderConfig.AsterPrivateKey = exchangeCfg.AsterPrivateKey
-	case "lighter":
-		traderConfig.LighterPrivateKey = exchangeCfg.LighterPrivateKey
-		traderConfig.LighterWalletAddr = exchangeCfg.LighterWalletAddr
-		traderConfig.LighterTestnet = exchangeCfg.Testnet
+	default:
+		return fmt.Errorf("unsupported exchange type: %s", exchangeCfg.ExchangeType)
 	}
 
 	// Set API keys based on AI model

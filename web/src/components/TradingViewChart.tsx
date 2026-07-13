@@ -6,11 +6,7 @@ import { ChevronDown, TrendingUp, X } from 'lucide-react'
 // 支持的交易所列表 (合约格式)
 const EXCHANGES = [
   { id: 'BINANCE', name: 'Binance', prefix: 'BINANCE:', suffix: '.P' },
-  { id: 'BYBIT', name: 'Bybit', prefix: 'BYBIT:', suffix: '.P' },
   { id: 'OKX', name: 'OKX', prefix: 'OKX:', suffix: '.P' },
-  { id: 'BITGET', name: 'Bitget', prefix: 'BITGET:', suffix: '.P' },
-  { id: 'MEXC', name: 'MEXC', prefix: 'MEXC:', suffix: '.P' },
-  { id: 'GATEIO', name: 'Gate.io', prefix: 'GATEIO:', suffix: '.P' },
 ] as const
 
 // 热门交易对
