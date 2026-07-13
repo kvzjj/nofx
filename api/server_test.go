@@ -2,10 +2,123 @@ package api
 
 import (
 	"encoding/json"
+	"net/http/httptest"
+	"path/filepath"
 	"testing"
 
+	"nofx/manager"
 	"nofx/store"
+
+	"github.com/gin-gonic/gin"
 )
+
+func TestGetTraderFromQueryRequiresTraderOwnership(t *testing.T) {
+	s := newTestServerWithTraders(t,
+		testTrader("owner-trader", "owner"),
+		testTrader("other-trader", "other"),
+	)
+	c := newTraderQueryContext("owner", "other-trader")
+
+	_, _, err := s.getTraderFromQuery(c)
+	if err == nil {
+		t.Fatal("expected access error for another user's trader")
+	}
+	if err.Error() != "Trader does not exist or no access permission" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetTraderFromQueryDefaultsToCurrentUsersTrader(t *testing.T) {
+	s := newTestServerWithTraders(t,
+		testTrader("owner-trader", "owner"),
+		testTrader("other-trader", "other"),
+	)
+	c := newTraderQueryContext("owner", "")
+
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		t.Fatalf("get trader from query: %v", err)
+	}
+	if traderID != "owner-trader" {
+		t.Fatalf("expected owner trader, got %q", traderID)
+	}
+}
+
+func TestGetTraderFromQueryDoesNotFallbackToGlobalTrader(t *testing.T) {
+	s := newTestServerWithTraders(t, testTrader("other-trader", "other"))
+	c := newTraderQueryContext("owner", "")
+
+	_, _, err := s.getTraderFromQuery(c)
+	if err == nil {
+		t.Fatal("expected no available traders error")
+	}
+	if err.Error() != "No available traders" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func TestGetTraderFromQueryRejectsExplicitTraderWhenUserHasNoTraders(t *testing.T) {
+	s := newTestServerWithTraders(t, testTrader("other-trader", "other"))
+	c := newTraderQueryContext("owner", "other-trader")
+
+	_, _, err := s.getTraderFromQuery(c)
+	if err == nil {
+		t.Fatal("expected no available traders error")
+	}
+	if err.Error() != "No available traders" {
+		t.Fatalf("unexpected error: %v", err)
+	}
+}
+
+func newTestServerWithTraders(t *testing.T, traders ...*store.Trader) *Server {
+	t.Helper()
+
+	st, err := store.New(filepath.Join(t.TempDir(), "test.db"))
+	if err != nil {
+		t.Fatalf("create store: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = st.Close()
+	})
+
+	for _, trader := range traders {
+		if err := st.Trader().Create(trader); err != nil {
+			t.Fatalf("create trader %s: %v", trader.ID, err)
+		}
+	}
+
+	return &Server{
+		traderManager: manager.NewTraderManager(),
+		store:         st,
+	}
+}
+
+func testTrader(id, userID string) *store.Trader {
+	return &store.Trader{
+		ID:                  id,
+		UserID:              userID,
+		Name:                id,
+		AIModelID:           "model",
+		ExchangeID:          "exchange",
+		InitialBalance:      1000,
+		ScanIntervalMinutes: 3,
+		IsCrossMargin:       true,
+		ShowInCompetition:   true,
+	}
+}
+
+func newTraderQueryContext(userID, traderID string) *gin.Context {
+	gin.SetMode(gin.TestMode)
+	w := httptest.NewRecorder()
+	c, _ := gin.CreateTestContext(w)
+	target := "/api/account"
+	if traderID != "" {
+		target += "?trader_id=" + traderID
+	}
+	c.Request = httptest.NewRequest("GET", target, nil)
+	c.Set("user_id", userID)
+	return c
+}
 
 // TestUpdateTraderRequest_SystemPromptTemplate Test whether SystemPromptTemplate field exists when updating trader
 func TestUpdateTraderRequest_SystemPromptTemplate(t *testing.T) {

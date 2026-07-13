@@ -111,6 +111,7 @@ func (s *Server) setupRoutes() {
 		api.POST("/login", s.handleLogin)
 		api.POST("/verify-otp", s.handleVerifyOTP)
 		api.POST("/complete-registration", s.handleCompleteRegistration)
+		api.POST("/reset-password", s.handleResetPassword)
 
 		// Routes requiring authentication
 		protected := api.Group("/", s.authMiddleware())
@@ -317,7 +318,10 @@ func isPrivateIP(ip net.IP) bool {
 // getTraderFromQuery Get trader from query parameter
 func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, string, error) {
 	userID := c.GetString("user_id")
-	traderID := c.Query("trader_id")
+	traderID := strings.TrimSpace(c.Query("trader_id"))
+	if userID == "" {
+		return nil, "", fmt.Errorf("User not authenticated")
+	}
 
 	// Ensure user's traders are loaded into memory
 	err := s.traderManager.LoadUserTradersFromStore(s.store, userID)
@@ -325,23 +329,24 @@ func (s *Server) getTraderFromQuery(c *gin.Context) (*manager.TraderManager, str
 		logger.Infof("⚠️ Failed to load traders for user %s: %v", userID, err)
 	}
 
-	if traderID == "" {
-		// If no trader_id specified, return first trader for this user
-		ids := s.traderManager.GetTraderIDs()
-		if len(ids) == 0 {
-			return nil, "", fmt.Errorf("No available traders")
-		}
-
-		// Get user's trader list, prioritize returning user's own traders
-		userTraders, err := s.store.Trader().List(userID)
-		if err == nil && len(userTraders) > 0 {
-			traderID = userTraders[0].ID
-		} else {
-			traderID = ids[0]
-		}
+	userTraders, err := s.store.Trader().List(userID)
+	if err != nil {
+		return nil, "", fmt.Errorf("Failed to get trader list: %w", err)
+	}
+	if len(userTraders) == 0 {
+		return nil, "", fmt.Errorf("No available traders")
 	}
 
-	return s.traderManager, traderID, nil
+	if traderID != "" {
+		for _, t := range userTraders {
+			if t.ID == traderID {
+				return s.traderManager, traderID, nil
+			}
+		}
+		return nil, "", fmt.Errorf("Trader does not exist or no access permission")
+	}
+
+	return s.traderManager, userTraders[0].ID, nil
 }
 
 // AI trader management related structures
@@ -1312,7 +1317,9 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 	}
 
 	// Update each model's configuration
+	updatedModelKeys := make(map[string]bool, len(req.Models))
 	for modelID, modelData := range req.Models {
+		updatedModelKeys[modelID] = true
 		err := s.store.AIModel().Update(userID, modelID, modelData.Enabled, modelData.APIKey, modelData.CustomAPIURL, modelData.CustomModelName)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to update model %s: %v", modelID, err)})
@@ -1320,8 +1327,21 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 		}
 	}
 
-	// Reload all traders for this user to make new config take effect immediately
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
+	// Include provider names for legacy traders that stored provider instead of model ID.
+	if aiModels, listErr := s.store.AIModel().List(userID); listErr == nil {
+		for _, model := range aiModels {
+			if updatedModelKeys[model.ID] {
+				updatedModelKeys[model.Provider] = true
+			}
+		}
+	} else {
+		logger.Infof("⚠️ Failed to list AI models for reload matching: %v", listErr)
+	}
+
+	// Reload affected traders so updated keys and disabled models take effect immediately.
+	err = s.traderManager.ReloadUserTradersFromStore(s.store, userID, func(traderCfg *store.Trader) bool {
+		return updatedModelKeys[traderCfg.AIModelID]
+	})
 	if err != nil {
 		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
 		// Don't return error here since model config was successfully updated to database
@@ -1433,7 +1453,9 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 	}
 
 	// Update each exchange's configuration
+	updatedExchangeIDs := make(map[string]bool, len(req.Exchanges))
 	for exchangeID, exchangeData := range req.Exchanges {
+		updatedExchangeIDs[exchangeID] = true
 		exchange, err := s.store.Exchange().GetByID(userID, exchangeID)
 		if err != nil {
 			c.JSON(http.StatusInternalServerError, gin.H{"error": fmt.Sprintf("Failed to get exchange %s: %v", exchangeID, err)})
@@ -1451,8 +1473,10 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 		}
 	}
 
-	// Reload all traders for this user to make new config take effect immediately
-	err = s.traderManager.LoadUserTradersFromStore(s.store, userID)
+	// Reload affected traders so updated keys and disabled exchanges take effect immediately.
+	err = s.traderManager.ReloadUserTradersFromStore(s.store, userID, func(traderCfg *store.Trader) bool {
+		return updatedExchangeIDs[traderCfg.ExchangeID]
+	})
 	if err != nil {
 		logger.Infof("⚠️ Failed to reload user traders into memory: %v", err)
 		// Don't return error here since exchange config was successfully updated to database

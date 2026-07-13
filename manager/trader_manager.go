@@ -397,6 +397,27 @@ func (tm *TraderManager) RemoveTrader(traderID string) {
 	logger.Infof("✓ Trader %s stopped and removed from memory", traderID)
 }
 
+// ReloadUserTradersFromStore stops and removes matching in-memory traders for a
+// user, then loads them again from the latest store configuration.
+func (tm *TraderManager) ReloadUserTradersFromStore(st *store.Store, userID string, shouldReload func(*store.Trader) bool) error {
+	traders, err := st.Trader().List(userID)
+	if err != nil {
+		return fmt.Errorf("failed to get trader list for user %s: %w", userID, err)
+	}
+
+	reloadedCount := 0
+	for _, traderCfg := range traders {
+		if shouldReload != nil && !shouldReload(traderCfg) {
+			continue
+		}
+		tm.RemoveTrader(traderCfg.ID)
+		reloadedCount++
+	}
+
+	logger.Infof("🔄 Reloading %d trader(s) for user %s from latest store config", reloadedCount, userID)
+	return tm.LoadUserTradersFromStore(st, userID)
+}
+
 // LoadUserTradersFromStore loads traders from store for a specific user to memory
 func (tm *TraderManager) LoadUserTradersFromStore(st *store.Store, userID string) error {
 	tm.mu.Lock()
