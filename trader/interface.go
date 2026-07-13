@@ -45,6 +45,52 @@ type SingleOrderCanceler interface {
 	CancelOrder(symbol, orderID string) error
 }
 
+// ExchangeOpenOrder is the normalized account-level view of an order that is
+// still live at the exchange. Protective orders use STOP_LOSS/TAKE_PROFIT as
+// Kind; regular entry/exit orders leave Kind empty.
+type ExchangeOpenOrder struct {
+	OrderID      string
+	Symbol       string
+	PositionSide string
+	Kind         string
+	Status       OrderState
+	Quantity     float64
+	ExecutedQty  float64
+	AvgPrice     float64
+	Fee          float64
+	TriggerPrice float64
+}
+
+// OpenOrderLister is implemented by exchanges that expose an account-level
+// live order snapshot, including conditional/protective orders.
+type OpenOrderLister interface {
+	ListOpenOrders() ([]ExchangeOpenOrder, error)
+}
+
+// FreshPositionReader bypasses short-lived UI/read caches for reconciliation.
+type FreshPositionReader interface {
+	GetPositionsFresh() ([]map[string]interface{}, error)
+}
+
+// ExchangeFill is one immutable execution from the exchange trade ledger.
+type ExchangeFill struct {
+	TradeID      string
+	OrderID      string
+	Symbol       string
+	Side         string
+	PositionSide string
+	Price        float64
+	Quantity     float64
+	Fee          float64
+	RealizedPnL  float64
+	Time         time.Time
+}
+
+// RecentFillLister returns immutable fills for account reconciliation.
+type RecentFillLister interface {
+	ListRecentFills(symbols []string, since time.Time) ([]ExchangeFill, error)
+}
+
 // ClosedPnLRecord represents a single closed position record from exchange
 type ClosedPnLRecord struct {
 	Symbol      string    // Trading pair (e.g., "BTCUSDT")

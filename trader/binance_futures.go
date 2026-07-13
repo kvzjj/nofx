@@ -58,6 +58,7 @@ type FuturesTrader struct {
 	cachedPositions     []map[string]interface{}
 	positionsCacheTime  time.Time
 	positionsCacheMutex sync.RWMutex
+	positionsFetchMutex sync.Mutex
 
 	// Cache validity period (15 seconds)
 	cacheDuration time.Duration
@@ -177,9 +178,15 @@ func (t *FuturesTrader) GetBalance() (map[string]interface{}, error) {
 
 // GetPositions gets all positions (with cache)
 func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
+	return t.getPositions(false)
+}
+
+func (t *FuturesTrader) getPositions(forceFresh bool) ([]map[string]interface{}, error) {
+	t.positionsFetchMutex.Lock()
+	defer t.positionsFetchMutex.Unlock()
 	// First check if cache is valid
 	t.positionsCacheMutex.RLock()
-	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
+	if !forceFresh && t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
 		cacheAge := time.Since(t.positionsCacheTime)
 		t.positionsCacheMutex.RUnlock()
 		logger.Infof("✓ Using cached position information (cache age: %.1f seconds ago)", cacheAge.Seconds())
@@ -228,6 +235,11 @@ func (t *FuturesTrader) GetPositions() ([]map[string]interface{}, error) {
 	t.positionsCacheMutex.Unlock()
 
 	return result, nil
+}
+
+// GetPositionsFresh bypasses the read cache for account reconciliation.
+func (t *FuturesTrader) GetPositionsFresh() ([]map[string]interface{}, error) {
+	return t.getPositions(true)
 }
 
 // SetMarginMode sets margin mode
@@ -653,6 +665,88 @@ func (t *FuturesTrader) CancelOrder(symbol, orderID string) error {
 		return fmt.Errorf("failed to cancel order %s: %w", orderID, err)
 	}
 	return nil
+}
+
+// ListOpenOrders returns a fresh account-level snapshot of regular and
+// protective futures orders.
+func (t *FuturesTrader) ListOpenOrders() ([]ExchangeOpenOrder, error) {
+	orders, err := t.client.NewListOpenOrdersService().Do(context.Background())
+	if err != nil {
+		return nil, fmt.Errorf("failed to list account open orders: %w", err)
+	}
+	result := make([]ExchangeOpenOrder, 0, len(orders))
+	for _, order := range orders {
+		qty, _ := strconv.ParseFloat(order.OrigQuantity, 64)
+		executed, _ := strconv.ParseFloat(order.ExecutedQuantity, 64)
+		avgPrice, _ := strconv.ParseFloat(order.AvgPrice, 64)
+		triggerPrice, _ := strconv.ParseFloat(order.StopPrice, 64)
+		kind := ""
+		switch order.Type {
+		case futures.OrderTypeStopMarket, futures.OrderTypeStop:
+			kind = "STOP_LOSS"
+		case futures.OrderTypeTakeProfitMarket, futures.OrderTypeTakeProfit:
+			kind = "TAKE_PROFIT"
+		}
+		positionSide := string(order.PositionSide)
+		if kind != "" && strings.EqualFold(positionSide, "BOTH") {
+			if order.Side == futures.SideTypeSell {
+				positionSide = "LONG"
+			} else if order.Side == futures.SideTypeBuy {
+				positionSide = "SHORT"
+			}
+		}
+		result = append(result, ExchangeOpenOrder{
+			OrderID: strconv.FormatInt(order.OrderID, 10), Symbol: order.Symbol,
+			PositionSide: positionSide, Kind: kind,
+			Status: normalizeOrderState(string(order.Status)), Quantity: qty,
+			ExecutedQty: executed, AvgPrice: avgPrice, TriggerPrice: triggerPrice,
+		})
+	}
+	return result, nil
+}
+
+// ListRecentFills returns immutable account trades for the requested symbols.
+func (t *FuturesTrader) ListRecentFills(symbols []string, since time.Time) ([]ExchangeFill, error) {
+	seenSymbols := make(map[string]struct{})
+	var result []ExchangeFill
+	for _, symbol := range symbols {
+		if symbol == "" {
+			continue
+		}
+		if _, exists := seenSymbols[symbol]; exists {
+			continue
+		}
+		seenSymbols[symbol] = struct{}{}
+		var fromID int64
+		for {
+			service := t.client.NewListAccountTradeService().Symbol(symbol).Limit(1000)
+			if fromID > 0 {
+				service.FromID(fromID)
+			} else {
+				service.StartTime(since.UnixMilli())
+			}
+			trades, err := service.Do(context.Background())
+			if err != nil {
+				return nil, fmt.Errorf("failed to list recent fills for %s: %w", symbol, err)
+			}
+			for _, trade := range trades {
+				price, _ := strconv.ParseFloat(trade.Price, 64)
+				qty, _ := strconv.ParseFloat(trade.Quantity, 64)
+				fee, _ := strconv.ParseFloat(trade.Commission, 64)
+				pnl, _ := strconv.ParseFloat(trade.RealizedPnl, 64)
+				result = append(result, ExchangeFill{
+					TradeID: trade.Symbol + ":" + strconv.FormatInt(trade.ID, 10), OrderID: strconv.FormatInt(trade.OrderID, 10),
+					Symbol: trade.Symbol, Side: string(trade.Side), PositionSide: string(trade.PositionSide),
+					Price: price, Quantity: qty, Fee: fee, RealizedPnL: pnl, Time: time.UnixMilli(trade.Time),
+				})
+			}
+			if len(trades) < 1000 {
+				break
+			}
+			fromID = trades[len(trades)-1].ID + 1
+		}
+	}
+	return result, nil
 }
 
 // CancelPositionOrders cancels protective orders for exactly one hedge-mode

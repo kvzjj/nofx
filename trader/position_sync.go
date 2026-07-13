@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"nofx/logger"
 	"nofx/store"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -22,6 +23,7 @@ type PositionSyncManager struct {
 	cacheMutex           sync.RWMutex
 	lastHistorySync      map[string]time.Time // trader_id -> last history sync time
 	lastHistorySyncMutex sync.RWMutex
+	accountMutexes       sync.Map // trader_id -> *sync.Mutex
 }
 
 // NewPositionSyncManager Create position synchronization manager
@@ -45,9 +47,6 @@ func (m *PositionSyncManager) Start() {
 	m.wg.Add(1)
 	go m.run()
 	logger.Info("📊 Position sync manager started")
-
-	// Run startup sync in background
-	go m.startupSync()
 }
 
 // Stop Stop position synchronization service
@@ -86,31 +85,48 @@ func (m *PositionSyncManager) run() {
 
 // syncPositions Synchronize all position statuses
 func (m *PositionSyncManager) syncPositions() {
-	// Get all OPEN status positions
-	localPositions, err := m.store.Position().GetAllOpenPositions()
+	traders, err := m.store.Trader().ListAll()
 	if err != nil {
-		logger.Infof("⚠️  Failed to get local positions: %v", err)
+		logger.Infof("⚠️  Failed to list traders for reconciliation: %v", err)
 		return
 	}
-
-	if len(localPositions) == 0 {
-		return
-	}
-
-	// Group by trader_id
-	positionsByTrader := make(map[string][]*store.TraderPosition)
-	for _, pos := range localPositions {
-		positionsByTrader[pos.TraderID] = append(positionsByTrader[pos.TraderID], pos)
-	}
-
-	// Process each trader
-	for traderID, traderPositions := range positionsByTrader {
-		m.syncTraderPositions(traderID, traderPositions)
+	for _, traderInfo := range traders {
+		m.syncTraderAccount(traderInfo.ID)
 	}
 }
 
 // syncTraderPositions Synchronize positions for a single trader
 func (m *PositionSyncManager) syncTraderPositions(traderID string, localPositions []*store.TraderPosition) {
+	m.syncTraderAccountWithPositions(traderID, localPositions)
+}
+
+func (m *PositionSyncManager) syncTraderAccount(traderID string) {
+	m.syncTraderAccountWithPositions(traderID, nil)
+}
+
+func (m *PositionSyncManager) syncTraderAccountWithPositions(traderID string, localPositions []*store.TraderPosition) {
+	config, err := m.getTraderConfig(traderID)
+	if err != nil {
+		logger.Infof("⚠️  Failed to get trader config (ID: %s): %v", traderID, err)
+		return
+	}
+	lockKey := config.Exchange.ID
+	if lockKey == "" {
+		lockKey = traderID
+	}
+	lockValue, _ := m.accountMutexes.LoadOrStore(lockKey, &sync.Mutex{})
+	accountLock := lockValue.(*sync.Mutex)
+	accountLock.Lock()
+	defer accountLock.Unlock()
+	if localPositions == nil {
+		var err error
+		localPositions, err = m.store.Position().GetOpenPositions(traderID)
+		if err != nil {
+			logger.Infof("⚠️  Failed to get local positions (ID: %s): %v", traderID, err)
+			return
+		}
+	}
+
 	// Get or create trader instance
 	trader, err := m.getOrCreateTrader(traderID)
 	if err != nil {
@@ -119,13 +135,8 @@ func (m *PositionSyncManager) syncTraderPositions(traderID string, localPosition
 	}
 
 	// Get exchange info for history sync
-	config, _ := m.getTraderConfig(traderID)
-	exchangeID := ""
-	exchangeType := ""
-	if config != nil {
-		exchangeID = config.Exchange.ID             // UUID for database association
-		exchangeType = config.Exchange.ExchangeType // "binance", "bybit" etc for trader creation
-	}
+	exchangeID := config.Exchange.ID
+	exchangeType := config.Exchange.ExchangeType
 
 	// Maybe run periodic history sync
 	if exchangeID != "" && exchangeType != "" {
@@ -133,48 +144,119 @@ func (m *PositionSyncManager) syncTraderPositions(traderID string, localPosition
 	}
 
 	// Get current exchange positions
-	exchangePositions, err := trader.GetPositions()
+	var exchangePositions []map[string]interface{}
+	if freshReader, ok := trader.(FreshPositionReader); ok {
+		exchangePositions, err = freshReader.GetPositionsFresh()
+	} else {
+		exchangePositions, err = trader.GetPositions()
+	}
 	if err != nil {
 		logger.Infof("⚠️  Failed to get exchange positions (ID: %s): %v", traderID, err)
+	} else {
+		m.reconcilePositionSnapshot(traderID, exchangeID, exchangeType, trader, localPositions, exchangePositions)
+	}
+
+	var openOrders []ExchangeOpenOrder
+	openOrdersAvailable := false
+	if lister, ok := trader.(OpenOrderLister); ok {
+		openOrders, err = lister.ListOpenOrders()
+		if err != nil {
+			logger.Infof("⚠️  Failed to list exchange open orders (ID: %s): %v", traderID, err)
+		} else {
+			openOrdersAvailable = true
+		}
+	}
+	m.reconcileOrders(traderID, exchangeID, exchangeType, trader, openOrders, openOrdersAvailable)
+	symbols := make([]string, 0, len(localPositions)+len(exchangePositions)+len(openOrders))
+	for _, pos := range localPositions {
+		symbols = append(symbols, pos.Symbol)
+	}
+	for _, pos := range exchangePositions {
+		if symbol, _, _ := normalizeExchangePosition(pos); symbol != "" {
+			symbols = append(symbols, symbol)
+		}
+	}
+	for _, order := range openOrders {
+		symbols = append(symbols, order.Symbol)
+	}
+	for _, symbol := range strings.FieldsFunc(config.Trader.TradingSymbols, func(r rune) bool {
+		return r == ',' || r == ';' || r == ' ' || r == '\n' || r == '\t'
+	}) {
+		symbols = append(symbols, strings.ToUpper(strings.TrimSpace(symbol)))
+	}
+	m.reconcileFills(traderID, exchangeID, trader, symbols)
+	if openOrdersAvailable {
+		currentPositions, err := m.store.Position().GetOpenPositions(traderID)
+		if err != nil {
+			logger.Infof("⚠️  Failed to reload positions for protection reconciliation (ID: %s): %v", traderID, err)
+			return
+		}
+		m.reconcileProtections(traderID, exchangeID, trader, openOrders, currentPositions)
+	}
+}
+
+func (m *PositionSyncManager) reconcileFills(traderID, exchangeID string, trader Trader, symbols []string) {
+	lister, ok := trader.(RecentFillLister)
+	if !ok {
 		return
 	}
-
-	// Build exchange position map: symbol_side -> position
-	// Note: Exchange returns side as "long"/"short" (lowercase), database stores "LONG"/"SHORT" (uppercase)
-	exchangeMap := make(map[string]map[string]interface{})
-	for _, pos := range exchangePositions {
-		symbol, _ := pos["symbol"].(string)
-		side, _ := pos["side"].(string) // Note: use "side" not "positionSide"
-		if symbol == "" || side == "" {
+	since, err := m.store.Execution().LastExchangeFillTime(traderID, exchangeID)
+	if err != nil {
+		logger.Infof("⚠️  Failed to get fill reconciliation cursor (ID: %s): %v", traderID, err)
+		return
+	}
+	fills, err := lister.ListRecentFills(symbols, since.Add(-time.Minute))
+	if err != nil {
+		logger.Infof("⚠️  Failed to list recent exchange fills (ID: %s): %v", traderID, err)
+		return
+	}
+	for _, fill := range fills {
+		if fill.TradeID == "" || fill.Time.IsZero() {
 			continue
 		}
-		// Normalize side to uppercase for matching with database
-		normalizedSide := strings.ToUpper(side)
-		key := fmt.Sprintf("%s_%s", symbol, normalizedSide)
-		exchangeMap[key] = pos
+		if err := m.store.Execution().UpsertExchangeFill(store.ExchangeFill{
+			TraderID: traderID, ExchangeID: exchangeID, TradeID: fill.TradeID,
+			OrderID: fill.OrderID, Symbol: fill.Symbol, PositionSide: strings.ToUpper(fill.PositionSide),
+			Side: strings.ToUpper(fill.Side), Quantity: fill.Quantity, Price: fill.Price,
+			Fee: fill.Fee, RealizedPnL: fill.RealizedPnL, ExecutedAt: fill.Time,
+		}); err != nil {
+			logger.Infof("⚠️  Failed to persist exchange fill %s: %v", fill.TradeID, err)
+		}
 	}
+}
 
-	// Compare local and exchange positions
+func (m *PositionSyncManager) reconcilePositionSnapshot(traderID, exchangeID, exchangeType string, trader Trader, localPositions []*store.TraderPosition, exchangePositions []map[string]interface{}) {
+	exchangeMap := make(map[string]map[string]interface{})
+	for _, pos := range exchangePositions {
+		symbol, side, qty := normalizeExchangePosition(pos)
+		if symbol == "" || side == "" || qty < 0.0000001 {
+			continue
+		}
+		exchangeMap[fmt.Sprintf("%s_%s", symbol, side)] = pos
+	}
 	for _, localPos := range localPositions {
 		key := fmt.Sprintf("%s_%s", localPos.Symbol, localPos.Side)
 		exchangePos, exists := exchangeMap[key]
-
 		if !exists {
-			// Exchange doesn't have this position → it has been closed
 			m.closeLocalPosition(localPos, trader, "manual")
 			continue
 		}
-
-		// Check if quantity is 0 or very small
-		qty := getFloatFromMap(exchangePos, "positionAmt")
-		if qty < 0 {
-			qty = -qty // Short position quantity is negative
+		_, _, qty := normalizeExchangePosition(exchangePos)
+		entryPrice := getFloatFromMap(exchangePos, "entryPrice")
+		leverage := int(getFloatFromMap(exchangePos, "leverage"))
+		if leverage <= 0 {
+			leverage = localPos.Leverage
 		}
-
-		if qty < 0.0000001 {
-			// Quantity is 0, position closed
-			m.closeLocalPosition(localPos, trader, "manual")
+		if entryPrice <= 0 {
+			entryPrice = localPos.EntryPrice
 		}
+		if err := m.store.Position().UpdateOpenPositionProjection(localPos.ID, qty, entryPrice, leverage); err != nil {
+			logger.Infof("⚠️  Failed to update exchange position projection %s %s: %v", localPos.Symbol, localPos.Side, err)
+		}
+		delete(exchangeMap, key)
+	}
+	for _, exchangePos := range exchangeMap {
+		m.createExternalPosition(traderID, exchangeID, exchangeType, exchangePos)
 	}
 }
 
@@ -195,29 +277,15 @@ func (m *PositionSyncManager) closeLocalPosition(pos *store.TraderPosition, trad
 		exitOrderID = closedPnLRecord.OrderID
 		logger.Infof("📊 Found accurate closure data from exchange for %s %s", pos.Symbol, pos.Side)
 	} else {
-		// Fallback: use market price and calculate PnL
-		exitPrice = pos.EntryPrice // Default to entry price
-		if price, err := trader.GetMarketPrice(pos.Symbol); err == nil && price > 0 {
-			exitPrice = price
-		}
-
-		// Calculate PnL
-		if pos.Side == "LONG" {
-			realizedPnL = (exitPrice - pos.EntryPrice) * pos.Quantity
-		} else {
-			realizedPnL = (pos.EntryPrice - exitPrice) * pos.Quantity
-		}
-		closeReason = reason
-		fee = 0
-		exitOrderID = ""
-		logger.Infof("⚠️  Using market price for closure (no exchange data): %s %s", pos.Symbol, pos.Side)
+		logger.Infof("⚠️  Deferring closure of %s %s until exchange fill/PnL data is available", pos.Symbol, pos.Side)
+		return
 	}
 
-	// Update database
-	err := m.store.Position().ClosePosition(
+	err := m.store.Position().ClosePositionWithAccurateData(
 		pos.ID,
 		exitPrice,
 		exitOrderID,
+		closedPnLRecord.ExitTime,
 		realizedPnL,
 		fee,
 		closeReason,
@@ -231,6 +299,217 @@ func (m *PositionSyncManager) closeLocalPosition(pos *store.TraderPosition, trad
 	}
 }
 
+func normalizeExchangePosition(pos map[string]interface{}) (string, string, float64) {
+	symbol, _ := pos["symbol"].(string)
+	side, _ := pos["side"].(string)
+	switch strings.ToUpper(side) {
+	case "BUY", "LONG":
+		side = "LONG"
+	case "SELL", "SHORT":
+		side = "SHORT"
+	default:
+		return symbol, "", 0
+	}
+	qty := getFloatFromMap(pos, "positionAmt")
+	if qty < 0 {
+		qty = -qty
+	}
+	return symbol, side, qty
+}
+
+func (m *PositionSyncManager) createExternalPosition(traderID, exchangeID, exchangeType string, pos map[string]interface{}) {
+	symbol, side, qty := normalizeExchangePosition(pos)
+	if symbol == "" || side == "" || qty < 0.0000001 {
+		return
+	}
+	if exists, err := m.store.Position().HasOpenPositionForExchange(exchangeID, symbol, side); err != nil {
+		logger.Infof("⚠️  Failed to check existing exchange position %s %s: %v", symbol, side, err)
+		return
+	} else if exists {
+		return
+	}
+	entryPrice := getFloatFromMap(pos, "entryPrice")
+	leverage := int(getFloatFromMap(pos, "leverage"))
+	if leverage <= 0 {
+		leverage = 1
+	}
+	createdTime := getFloatFromMap(pos, "createdTime")
+	entryTime := time.Now()
+	if createdTime > 0 {
+		entryTime = time.UnixMilli(int64(createdTime))
+	}
+	newPos := &store.TraderPosition{
+		TraderID: traderID, ExchangeID: exchangeID, ExchangeType: exchangeType,
+		ExchangePositionID: fmt.Sprintf("%s_%s_%d", symbol, side, entryTime.UnixMilli()), Symbol: symbol,
+		Side: side, Quantity: qty, EntryPrice: entryPrice, EntryTime: entryTime,
+		Leverage: leverage, Source: "sync",
+	}
+	if err := m.store.Position().CreateOpenPosition(newPos); err != nil {
+		logger.Infof("⚠️  Failed to create external position record: %v", err)
+	} else {
+		logger.Infof("📊 Reconciled external position: [%s] %s %s @ %.4f (qty: %.4f)", traderID[:8], symbol, side, entryPrice, qty)
+	}
+}
+
+func (m *PositionSyncManager) reconcileOrders(traderID, exchangeID, exchangeType string, trader Trader, openOrders []ExchangeOpenOrder, openOrdersAvailable bool) {
+	orders, err := m.store.Execution().ListActiveOrders(traderID, exchangeID)
+	if err != nil {
+		logger.Infof("⚠️  Failed to list active local orders (ID: %s): %v", traderID, err)
+		return
+	}
+	localOrders := make(map[string]store.TradeOrder, len(orders))
+	for _, order := range orders {
+		localOrders[order.OrderID] = order
+	}
+	if openOrdersAvailable {
+		for _, exchangeOrder := range openOrders {
+			if exchangeOrder.Kind != "" {
+				continue
+			}
+			order, exists := localOrders[exchangeOrder.OrderID]
+			if !exists {
+				order = store.TradeOrder{
+					TraderID: traderID, ExchangeID: exchangeID, ExchangeType: exchangeType,
+					OrderID: exchangeOrder.OrderID, Symbol: exchangeOrder.Symbol,
+					PositionSide: strings.ToUpper(exchangeOrder.PositionSide), Action: "external",
+					RequestedQty: exchangeOrder.Quantity,
+				}
+			}
+			order.ExecutedQty = exchangeOrder.ExecutedQty
+			order.AvgPrice = exchangeOrder.AvgPrice
+			order.Fee = exchangeOrder.Fee
+			order.Status = string(exchangeOrder.Status)
+			order.LastError = ""
+			if err := m.store.Execution().UpsertOrder(order); err != nil {
+				logger.Infof("⚠️  Failed to import exchange order %s: %v", order.OrderID, err)
+				continue
+			}
+			if err := m.store.Execution().RecordFill(order); err != nil {
+				logger.Infof("⚠️  Failed to persist exchange order fill %s: %v", order.OrderID, err)
+			}
+			delete(localOrders, exchangeOrder.OrderID)
+		}
+	}
+	for _, order := range localOrders {
+		status, err := trader.GetOrderStatus(order.Symbol, order.OrderID)
+		if err != nil {
+			logger.Infof("⚠️  Failed to reconcile order %s: %v", order.OrderID, err)
+			continue
+		}
+		order.ExchangeType = exchangeType
+		order.Status = string(normalizeOrderState(fmt.Sprint(status["status"])))
+		order.ExecutedQty = getFloatFromMap(status, "executedQty")
+		order.AvgPrice = getFloatFromMap(status, "avgPrice")
+		order.Fee = getFloatFromMap(status, "commission")
+		order.LastError = ""
+		if err := m.store.Execution().UpsertOrder(order); err != nil {
+			logger.Infof("⚠️  Failed to persist reconciled order %s: %v", order.OrderID, err)
+			continue
+		}
+		if err := m.store.Execution().RecordFill(order); err != nil {
+			logger.Infof("⚠️  Failed to persist reconciled fill %s: %v", order.OrderID, err)
+		}
+	}
+}
+
+func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, trader Trader, orders []ExchangeOpenOrder, localPositions []*store.TraderPosition) {
+	type protectionState struct{ stopQty, takeQty float64 }
+	states := make(map[string]protectionState)
+	positionKeys := make(map[string]struct{}, len(localPositions))
+	for _, pos := range localPositions {
+		positionKeys[pos.Symbol+"_"+pos.Side] = struct{}{}
+	}
+	orphans := make(map[string]ExchangeOpenOrder)
+	for _, order := range orders {
+		if order.Kind == "" {
+			continue
+		}
+		positionSide := strings.ToUpper(order.PositionSide)
+		if positionSide != "LONG" && positionSide != "SHORT" {
+			continue
+		}
+		key := order.Symbol + "_" + positionSide
+		if _, exists := positionKeys[key]; !exists {
+			orphans[key] = order
+			continue
+		}
+		state := states[key]
+		if order.Kind == "STOP_LOSS" {
+			state.stopQty += order.Quantity
+		}
+		if order.Kind == "TAKE_PROFIT" {
+			state.takeQty += order.Quantity
+		}
+		states[key] = state
+	}
+	if canceler, ok := trader.(PositionOrderCanceler); ok {
+		for key, order := range orphans {
+			if err := canceler.CancelPositionOrders(order.Symbol, order.PositionSide); err != nil {
+				logger.Infof("⚠️  Failed to cancel orphan protection orders %s: %v", key, err)
+			} else {
+				logger.Infof("📊 Canceled orphan protection orders %s", key)
+			}
+		}
+	}
+	for _, pos := range localPositions {
+		if err := m.store.Execution().MarkProtectionsMissing(traderID, exchangeID, pos.Symbol, pos.Side); err != nil {
+			logger.Infof("⚠️  Failed to clear stale protections for %s %s: %v", pos.Symbol, pos.Side, err)
+		}
+		state := states[pos.Symbol+"_"+pos.Side]
+		status := "UNPROTECTED"
+		tolerance := pos.Quantity*1e-6 + 1e-9
+		if state.stopQty+tolerance >= pos.Quantity && state.takeQty+tolerance >= pos.Quantity {
+			status = "PROTECTED"
+		}
+		if err := m.store.Position().SetOpenPositionProtectionStatus(traderID, pos.Symbol, pos.Side, status); err != nil {
+			logger.Infof("⚠️  Failed to derive protection status for %s %s: %v", pos.Symbol, pos.Side, err)
+		}
+		if pos.EntryOrderID == "" {
+			continue
+		}
+		for _, order := range orders {
+			if order.Kind == "" || order.Symbol != pos.Symbol || !strings.EqualFold(order.PositionSide, pos.Side) {
+				continue
+			}
+			if err := m.store.Execution().UpsertReconciledProtection(traderID, exchangeID, pos.EntryOrderID, order.OrderID, pos.Symbol, pos.Side, order.Kind, order.Quantity, order.TriggerPrice); err != nil {
+				logger.Infof("⚠️  Failed to reconcile protection order %s: %v", order.OrderID, err)
+			}
+		}
+		intents, err := m.store.Execution().ListProtectionOrders(traderID, exchangeID, pos.EntryOrderID)
+		if err != nil {
+			logger.Infof("⚠️  Failed to load protection intents for %s %s: %v", pos.Symbol, pos.Side, err)
+			continue
+		}
+		for _, intent := range intents {
+			covered := state.stopQty
+			if intent.Kind == "TAKE_PROFIT" {
+				covered = state.takeQty
+			}
+			if covered+tolerance >= pos.Quantity || intent.TriggerPrice <= 0 {
+				continue
+			}
+			missingQuantity := pos.Quantity - covered
+			var repairErr error
+			if intent.Kind == "STOP_LOSS" {
+				repairErr = trader.SetStopLoss(pos.Symbol, pos.Side, missingQuantity, intent.TriggerPrice)
+			} else if intent.Kind == "TAKE_PROFIT" {
+				repairErr = trader.SetTakeProfit(pos.Symbol, pos.Side, missingQuantity, intent.TriggerPrice)
+			} else {
+				continue
+			}
+			repairStatus := "REPAIRING"
+			repairErrorText := ""
+			if repairErr != nil {
+				repairStatus = "FAILED"
+				repairErrorText = repairErr.Error()
+			}
+			if err := m.store.Execution().UpsertProtection(traderID, exchangeID, pos.EntryOrderID, pos.Symbol, pos.Side, intent.Kind, missingQuantity, intent.TriggerPrice, repairStatus, intent.AttemptCount+1, repairErrorText); err != nil {
+				logger.Infof("⚠️  Failed to persist protection repair for %s %s: %v", pos.Symbol, pos.Side, err)
+			}
+		}
+	}
+}
+
 // findClosedPnLRecord Try to find matching ClosedPnL record from exchange
 // For Binance, directly query trades for the specific symbol (more reliable than Income API)
 func (m *PositionSyncManager) findClosedPnLRecord(trader Trader, pos *store.TraderPosition) *ClosedPnLRecord {
@@ -240,7 +519,7 @@ func (m *PositionSyncManager) findClosedPnLRecord(trader Trader, pos *store.Trad
 	}
 
 	// Fallback: use GetClosedPnL for other exchanges
-	startTime := time.Now().Add(-24 * time.Hour)
+	startTime := pos.EntryTime.Add(-time.Minute)
 	records, err := trader.GetClosedPnL(startTime, 100)
 	if err != nil {
 		logger.Infof("⚠️  Failed to get closed PnL records: %v", err)
@@ -252,8 +531,8 @@ func (m *PositionSyncManager) findClosedPnLRecord(trader Trader, pos *store.Trad
 
 // findClosedPnLFromBinanceTrades queries Binance directly for trades of a specific symbol
 func (m *PositionSyncManager) findClosedPnLFromBinanceTrades(trader *FuturesTrader, pos *store.TraderPosition) *ClosedPnLRecord {
-	// Query trades for this specific symbol from the last hour
-	startTime := time.Now().Add(-1 * time.Hour)
+	// Query from this position lifecycle instead of mixing in an earlier one.
+	startTime := pos.EntryTime.Add(-time.Minute)
 	trades, err := trader.GetTradesForSymbol(pos.Symbol, startTime, 100)
 	if err != nil {
 		logger.Infof("⚠️  Failed to get trades for %s: %v", pos.Symbol, err)
@@ -273,13 +552,12 @@ func (m *PositionSyncManager) findClosedPnLFromBinanceTrades(trader *FuturesTrad
 	matchCount := 0
 
 	posSide := strings.ToLower(pos.Side)
+	sort.Slice(trades, func(i, j int) bool { return trades[i].Time.Before(trades[j].Time) })
 
 	for _, trade := range trades {
-		// Skip opening trades
-		if trade.RealizedPnL == 0 {
+		if trade.Time.Before(pos.EntryTime.Add(-time.Second)) {
 			continue
 		}
-
 		// Determine if this trade closes our position
 		// For LONG position: SELL closes it
 		// For SHORT position: BUY closes it
@@ -287,17 +565,10 @@ func (m *PositionSyncManager) findClosedPnLFromBinanceTrades(trader *FuturesTrad
 		tradeSide := strings.ToUpper(trade.Side)
 		positionSide := strings.ToUpper(trade.PositionSide)
 
-		if positionSide == "LONG" && posSide == "long" {
+		if (positionSide == "LONG" || positionSide == "BOTH" || positionSide == "") && posSide == "long" && tradeSide == "SELL" {
 			isClosingTrade = true
-		} else if positionSide == "SHORT" && posSide == "short" {
+		} else if (positionSide == "SHORT" || positionSide == "BOTH" || positionSide == "") && posSide == "short" && tradeSide == "BUY" {
 			isClosingTrade = true
-		} else if positionSide == "BOTH" || positionSide == "" {
-			// One-way mode
-			if tradeSide == "SELL" && posSide == "long" {
-				isClosingTrade = true
-			} else if tradeSide == "BUY" && posSide == "short" {
-				isClosingTrade = true
-			}
 		}
 
 		if !isClosingTrade {
@@ -315,9 +586,12 @@ func (m *PositionSyncManager) findClosedPnLFromBinanceTrades(trader *FuturesTrad
 			latestExitTime = trade.Time
 			latestTradeID = trade.TradeID
 		}
+		if totalQty+1e-9 >= pos.Quantity {
+			break
+		}
 	}
 
-	if matchCount == 0 {
+	if matchCount == 0 || totalQty <= 0 {
 		logger.Infof("⚠️  No closing trades found for %s %s", pos.Symbol, pos.Side)
 		return nil
 	}
@@ -357,6 +631,9 @@ func (m *PositionSyncManager) aggregateClosedRecords(records []ClosedPnLRecord, 
 		if record.Symbol != pos.Symbol {
 			continue
 		}
+		if record.ExitTime.Before(pos.EntryTime) {
+			continue
+		}
 
 		recordSide := strings.ToLower(record.Side)
 		if recordSide != posSide {
@@ -375,6 +652,7 @@ func (m *PositionSyncManager) aggregateClosedRecords(records []ClosedPnLRecord, 
 	var latestExitTime time.Time
 	var latestOrderID, latestExchangeID string
 
+	sort.Slice(matchingRecords, func(i, j int) bool { return matchingRecords[i].ExitTime.Before(matchingRecords[j].ExitTime) })
 	for _, rec := range matchingRecords {
 		totalQty += rec.Quantity
 		totalPnL += rec.RealizedPnL
@@ -386,6 +664,12 @@ func (m *PositionSyncManager) aggregateClosedRecords(records []ClosedPnLRecord, 
 			latestOrderID = rec.OrderID
 			latestExchangeID = rec.ExchangeID
 		}
+		if totalQty+1e-9 >= pos.Quantity {
+			break
+		}
+	}
+	if totalQty <= 0 {
+		return nil
 	}
 
 	avgExitPrice := weightedExitPrice / totalQty

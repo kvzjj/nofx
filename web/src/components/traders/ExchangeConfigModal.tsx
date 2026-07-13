@@ -113,6 +113,23 @@ export function ExchangeConfigModal({
   const currentExchangeType = editingExchangeId
     ? selectedExchange?.exchange_type
     : selectedExchangeType
+  const supportsTestnet =
+    currentExchangeType === 'binance' ||
+    currentExchangeType === 'okx' ||
+    currentExchangeType === 'hyperliquid' ||
+    currentExchangeType === 'lighter'
+  const testnetDescription =
+    currentExchangeType === 'binance'
+      ? language === 'zh'
+        ? '启用后使用 Binance Futures Testnet，请填写测试网 API Key'
+        : 'Uses Binance Futures Testnet. Enter testnet API keys.'
+      : currentExchangeType === 'okx'
+        ? language === 'zh'
+          ? '启用后使用 OKX 模拟盘环境，请填写模拟盘 API Key 和 Passphrase'
+          : 'Uses the OKX demo trading environment. Enter demo API keys and passphrase.'
+        : language === 'zh'
+          ? '启用后使用该交易所测试环境'
+          : 'Uses the exchange testnet environment.'
 
   // 交易所注册链接配置
   const exchangeRegistrationLinks: Record<string, { url: string; hasReferral?: boolean }> = {
@@ -475,9 +492,7 @@ export function ExchangeConfigModal({
 
             {selectedTemplate && (
               <>
-                {(currentExchangeType === 'binance' ||
-                  currentExchangeType === 'hyperliquid' ||
-                  currentExchangeType === 'lighter') && (
+                {supportsTestnet && (
                   <div
                     className="p-4 rounded"
                     style={{
@@ -491,13 +506,7 @@ export function ExchangeConfigModal({
                           {language === 'zh' ? '测试网环境' : 'Testnet Environment'}
                         </div>
                         <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
-                          {language === 'zh'
-                            ? currentExchangeType === 'binance'
-                              ? '启用后使用 Binance Futures Testnet，请填写测试网 API Key'
-                              : '启用后使用该交易所测试环境'
-                            : currentExchangeType === 'binance'
-                              ? 'Uses Binance Futures Testnet. Enter testnet API keys.'
-                              : 'Uses the exchange testnet environment.'}
+                          {testnetDescription}
                         </div>
                       </div>
                       <input

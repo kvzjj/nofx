@@ -1,4 +1,4 @@
-import { useEffect, useState, useRef } from 'react'
+import { useEffect, useState, useRef, type ReactNode } from 'react'
 import useSWR, { mutate } from 'swr'
 import { api } from './lib/api'
 import { ChartTabs } from './components/ChartTabs'
@@ -21,7 +21,21 @@ import { DecisionCard } from './components/DecisionCard'
 import { PunkAvatar, getTraderAvatar } from './components/PunkAvatar'
 import { OFFICIAL_LINKS } from './constants/branding'
 import { BacktestPage } from './components/BacktestPage'
-import { LogOut, Loader2 } from 'lucide-react'
+import {
+  Activity,
+  Bot,
+  BrainCircuit,
+  BriefcaseBusiness,
+  ChartNoAxesCombined,
+  CircleDollarSign,
+  Clock3,
+  Database,
+  LogOut,
+  Loader2,
+  RefreshCw,
+  ShieldCheck,
+  WalletCards,
+} from 'lucide-react'
 import type {
   SystemStatus,
   AccountInfo,
@@ -57,18 +71,26 @@ function getModelDisplayName(modelId: string): string {
 }
 
 // Helper function to get exchange display name from exchange ID (UUID)
-function getExchangeDisplayNameFromList(exchangeId: string | undefined, exchanges: Exchange[] | undefined): string {
+function getExchangeDisplayNameFromList(
+  exchangeId: string | undefined,
+  exchanges: Exchange[] | undefined
+): string {
   if (!exchangeId) return 'Unknown'
-  const exchange = exchanges?.find(e => e.id === exchangeId)
+  const exchange = exchanges?.find((e) => e.id === exchangeId)
   if (!exchange) return exchangeId.substring(0, 8).toUpperCase() + '...'
   const typeName = exchange.exchange_type?.toUpperCase() || exchange.name
-  return exchange.account_name ? `${typeName} - ${exchange.account_name}` : typeName
+  return exchange.account_name
+    ? `${typeName} - ${exchange.account_name}`
+    : typeName
 }
 
 // Helper function to get exchange type from exchange ID (UUID) - for TradingView charts
-function getExchangeTypeFromList(exchangeId: string | undefined, exchanges: Exchange[] | undefined): string {
+function getExchangeTypeFromList(
+  exchangeId: string | undefined,
+  exchanges: Exchange[] | undefined
+): string {
   if (!exchangeId) return 'BINANCE'
-  const exchange = exchanges?.find(e => e.id === exchangeId)
+  const exchange = exchanges?.find((e) => e.id === exchangeId)
   if (!exchange) return 'BINANCE' // Default to BINANCE for charts
   return exchange.exchange_type?.toUpperCase() || 'BINANCE'
 }
@@ -439,7 +461,7 @@ function App() {
       />
 
       {/* Main Content */}
-      <main className="max-w-[1920px] mx-auto px-6 py-6 pt-24">
+      <main className="max-w-[1920px] mx-auto px-4 sm:px-6 py-6 pt-20 sm:pt-24">
         {currentPage === 'competition' ? (
           <CompetitionPage />
         ) : currentPage === 'traders' ? (
@@ -514,7 +536,12 @@ function App() {
                 e.currentTarget.style.borderColor = '#2B3139'
               }}
             >
-              <svg width="18" height="18" viewBox="0 0 16 16" fill="currentColor">
+              <svg
+                width="18"
+                height="18"
+                viewBox="0 0 16 16"
+                fill="currentColor"
+              >
                 <path d="M8 0C3.58 0 0 3.58 0 8c0 3.54 2.29 6.53 5.47 7.59.4.07.55-.17.55-.38 0-.19-.01-.82-.01-1.49-2.01.37-2.53-.49-2.69-.94-.09-.23-.48-.94-.82-1.13-.28-.15-.68-.52-.01-.53.63-.01 1.08.58 1.23.82.72 1.21 1.87.87 2.33.66.07-.52.28-.87.51-1.07-1.78-.2-3.64-.89-3.64-3.95 0-.87.31-1.59.82-2.15-.08-.2-.36-1.02.08-2.12 0 0 .67-.21 2.2.82.64-.18 1.32-.27 2-.27.68 0 1.36.09 2 .27 1.53-1.04 2.2-.82 2.2-.82.44 1.1.16 1.92.08 2.12.51.56.82 1.27.82 2.15 0 3.07-1.87 3.75-3.65 3.95.29.25.54.73.54 1.48 0 1.07-.01 1.93-.01 2.2 0 .21.15.46.55.38A8.013 8.013 0 0016 8c0-4.42-3.58-8-8-8z" />
               </svg>
               GitHub
@@ -541,7 +568,12 @@ function App() {
                 e.currentTarget.style.borderColor = '#2B3139'
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <path d="M18.244 2.25h3.308l-7.227 8.26 8.502 11.24H16.17l-5.214-6.817L4.99 21.75H1.68l7.73-8.835L1.254 2.25H8.08l4.713 6.231zm-1.161 17.52h1.833L7.084 4.126H5.117z" />
               </svg>
               Twitter
@@ -568,7 +600,12 @@ function App() {
                 e.currentTarget.style.borderColor = '#2B3139'
               }}
             >
-              <svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+              <svg
+                width="16"
+                height="16"
+                viewBox="0 0 24 24"
+                fill="currentColor"
+              >
                 <path d="M11.944 0A12 12 0 0 0 0 12a12 12 0 0 0 12 12 12 12 0 0 0 12-12A12 12 0 0 0 12 0a12 12 0 0 0-.056 0zm4.962 7.224c.1-.002.321.023.465.14a.506.506 0 0 1 .171.325c.016.093.036.306.02.472-.18 1.898-.962 6.502-1.36 8.627-.168.9-.499 1.201-.82 1.23-.696.065-1.225-.46-1.9-.902-1.056-.693-1.653-1.124-2.678-1.8-1.185-.78-.417-1.21.258-1.91.177-.184 3.247-2.977 3.307-3.23.007-.032.014-.15-.056-.212s-.174-.041-.249-.024c-.106.024-1.793 1.14-5.061 3.345-.48.33-.913.49-1.302.48-.428-.008-1.252-.241-1.865-.44-.752-.245-1.349-.374-1.297-.789.027-.216.325-.437.893-.663 3.498-1.524 5.83-2.529 6.998-3.014 3.332-1.386 4.025-1.627 4.476-1.635z" />
               </svg>
               Telegram
@@ -616,7 +653,9 @@ function TraderDetailsPage({
   exchanges?: Exchange[]
 }) {
   const [closingPosition, setClosingPosition] = useState<string | null>(null)
-  const [selectedChartSymbol, setSelectedChartSymbol] = useState<string | undefined>(undefined)
+  const [selectedChartSymbol, setSelectedChartSymbol] = useState<
+    string | undefined
+  >(undefined)
   const [chartUpdateKey, setChartUpdateKey] = useState<number>(0)
   const chartSectionRef = useRef<HTMLDivElement>(null)
 
@@ -624,9 +663,10 @@ function TraderDetailsPage({
   const handleClosePosition = async (symbol: string, side: string) => {
     if (!selectedTraderId) return
 
-    const confirmMsg = language === 'zh'
-      ? `确定要平仓 ${symbol} ${side === 'LONG' ? '多仓' : '空仓'} 吗？`
-      : `Are you sure you want to close ${symbol} ${side === 'LONG' ? 'LONG' : 'SHORT'} position?`
+    const confirmMsg =
+      language === 'zh'
+        ? `确定要平仓 ${symbol} ${side === 'LONG' ? '多仓' : '空仓'} 吗？`
+        : `Are you sure you want to close ${symbol} ${side === 'LONG' ? 'LONG' : 'SHORT'} position?`
 
     const confirmed = await confirmToast(confirmMsg, {
       title: language === 'zh' ? '确认平仓' : 'Confirm Close',
@@ -639,14 +679,21 @@ function TraderDetailsPage({
     setClosingPosition(symbol)
     try {
       await api.closePosition(selectedTraderId, symbol, side)
-      notify.success(language === 'zh' ? '平仓成功' : 'Position closed successfully')
+      notify.success(
+        language === 'zh' ? '平仓成功' : 'Position closed successfully'
+      )
       // 使用 SWR mutate 刷新数据而非重新加载页面
       await Promise.all([
         mutate(`positions-${selectedTraderId}`),
         mutate(`account-${selectedTraderId}`),
       ])
     } catch (err: unknown) {
-      const errorMsg = err instanceof Error ? err.message : (language === 'zh' ? '平仓失败' : 'Failed to close position')
+      const errorMsg =
+        err instanceof Error
+          ? err.message
+          : language === 'zh'
+            ? '平仓失败'
+            : 'Failed to close position'
       notify.error(errorMsg)
     } finally {
       setClosingPosition(null)
@@ -793,46 +840,69 @@ function TraderDetailsPage({
     )
   }
 
+  const modelName = getModelDisplayName(
+    selectedTrader.ai_model.split('_').pop() || selectedTrader.ai_model
+  )
+  const exchangeName = getExchangeDisplayNameFromList(
+    selectedTrader.exchange_id,
+    exchanges
+  )
+  const strategyName = selectedTrader.strategy_name || 'No Strategy'
+
   return (
-    <div>
+    <div className="dashboard-shell">
       {/* Trader Header */}
-      <div
-        className="mb-6 rounded p-6 animate-scale-in"
-        style={{
-          background:
-            'linear-gradient(135deg, rgba(240, 185, 11, 0.15) 0%, rgba(252, 213, 53, 0.05) 100%)',
-          border: '1px solid rgba(240, 185, 11, 0.2)',
-          boxShadow: '0 0 30px rgba(240, 185, 11, 0.15)',
-        }}
-      >
-        <div className="flex items-start justify-between mb-3">
-          <h2
-            className="text-2xl font-bold flex items-center gap-3"
-            style={{ color: '#EAECEF' }}
-          >
+      <section className="dashboard-hero animate-scale-in">
+        <div className="dashboard-hero__main">
+          <div className="dashboard-hero__identity">
             <PunkAvatar
-              seed={getTraderAvatar(selectedTrader.trader_id, selectedTrader.trader_name)}
-              size={48}
-              className="rounded-lg"
+              seed={getTraderAvatar(
+                selectedTrader.trader_id,
+                selectedTrader.trader_name
+              )}
+              size={52}
+              className="dashboard-hero__avatar"
             />
-            {selectedTrader.trader_name}
-          </h2>
+            <div className="min-w-0">
+              <div className="dashboard-eyebrow">
+                <span
+                  className={`dashboard-status-dot ${status?.is_running ? 'is-online' : ''}`}
+                />
+                {status?.is_running
+                  ? language === 'zh'
+                    ? '自动交易运行中'
+                    : 'Auto trading active'
+                  : language === 'zh'
+                    ? '交易员概览'
+                    : 'Trader overview'}
+              </div>
+              <h1 className="dashboard-hero__title">
+                {selectedTrader.trader_name}
+              </h1>
+              <div className="dashboard-meta-list">
+                <span>
+                  <Bot size={14} />
+                  {modelName}
+                </span>
+                <span>
+                  <Database size={14} />
+                  {exchangeName}
+                </span>
+                <span>
+                  <ShieldCheck size={14} />
+                  {strategyName}
+                </span>
+              </div>
+            </div>
+          </div>
 
           {/* Trader Selector */}
           {traders && traders.length > 0 && (
-            <div className="flex items-center gap-2">
-              <span className="text-sm" style={{ color: '#848E9C' }}>
-                {t('switchTrader', language)}:
-              </span>
+            <label className="dashboard-trader-select">
+              <span>{t('switchTrader', language)}</span>
               <select
                 value={selectedTraderId}
                 onChange={(e) => onTraderSelect(e.target.value)}
-                className="rounded px-3 py-2 text-sm font-medium cursor-pointer transition-colors"
-                style={{
-                  background: '#1E2329',
-                  border: '1px solid #2B3139',
-                  color: '#EAECEF',
-                }}
               >
                 {traders.map((trader) => (
                   <option key={trader.trader_id} value={trader.trader_id}>
@@ -840,98 +910,64 @@ function TraderDetailsPage({
                   </option>
                 ))}
               </select>
-            </div>
+            </label>
           )}
         </div>
-        <div
-          className="flex items-center gap-4 text-sm flex-wrap"
-          style={{ color: '#848E9C' }}
-        >
-          <span>
-            AI Model:{' '}
-            <span
-              className="font-semibold"
-              style={{
-                color: selectedTrader.ai_model.includes('qwen')
-                  ? '#c084fc'
-                  : '#60a5fa',
-              }}
-            >
-              {getModelDisplayName(
-                selectedTrader.ai_model.split('_').pop() ||
-                selectedTrader.ai_model
-              )}
+        <div className="dashboard-hero__footer">
+          <div className="dashboard-runtime">
+            <span>
+              <Activity size={15} />
+              {status?.call_count ?? 0}{' '}
+              {language === 'zh' ? '次循环' : 'cycles'}
             </span>
-          </span>
-          <span>•</span>
-          <span>
-            Exchange:{' '}
-            <span className="font-semibold" style={{ color: '#EAECEF' }}>
-              {getExchangeDisplayNameFromList(selectedTrader.exchange_id, exchanges)}
+            <span>
+              <Clock3 size={15} />
+              {status?.runtime_minutes ?? 0} min
             </span>
-          </span>
-          <span>•</span>
-          <span>
-            Strategy:{' '}
-            <span className="font-semibold" style={{ color: '#F0B90B' }}>
-              {selectedTrader.strategy_name || 'No Strategy'}
-            </span>
-          </span>
-          {status && (
-            <>
-              <span>•</span>
-              <span>Cycles: {status.call_count}</span>
-              <span>•</span>
-              <span>Runtime: {status.runtime_minutes} min</span>
-            </>
-          )}
-        </div>
-      </div>
-
-      {/* Debug Info */}
-      {account && (
-        <div
-          className="mb-4 p-3 rounded text-xs font-mono"
-          style={{ background: '#1E2329', border: '1px solid #2B3139' }}
-        >
-          <div style={{ color: '#848E9C' }}>
-            🔄 Last Update: {lastUpdate} | Total Equity:{' '}
-            {account?.total_equity?.toFixed(2) || '0.00'} | Available:{' '}
-            {account?.available_balance?.toFixed(2) || '0.00'} | P&L:{' '}
-            {account?.total_pnl?.toFixed(2) || '0.00'} (
-            {account?.total_pnl_pct?.toFixed(2) || '0.00'}%)
+          </div>
+          <div className="dashboard-updated">
+            <RefreshCw size={14} />
+            {language === 'zh' ? '更新于' : 'Updated'} {lastUpdate}
           </div>
         </div>
-      )}
+      </section>
 
       {/* Account Overview */}
-      <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-8">
+      <div className="dashboard-stat-grid">
         <StatCard
           title={t('totalEquity', language)}
           value={`${account?.total_equity?.toFixed(2) || '0.00'} USDT`}
           change={account?.total_pnl_pct || 0}
           positive={(account?.total_pnl ?? 0) > 0}
+          icon={<WalletCards size={18} />}
+          accent="yellow"
         />
         <StatCard
           title={t('availableBalance', language)}
           value={`${account?.available_balance?.toFixed(2) || '0.00'} USDT`}
           subtitle={`${account?.available_balance && account?.total_equity ? ((account.available_balance / account.total_equity) * 100).toFixed(1) : '0.0'}% ${t('free', language)}`}
+          icon={<CircleDollarSign size={18} />}
+          accent="blue"
         />
         <StatCard
           title={t('totalPnL', language)}
           value={`${account?.total_pnl !== undefined && account.total_pnl >= 0 ? '+' : ''}${account?.total_pnl?.toFixed(2) || '0.00'} USDT`}
           change={account?.total_pnl_pct || 0}
           positive={(account?.total_pnl ?? 0) >= 0}
+          icon={<ChartNoAxesCombined size={18} />}
+          accent={(account?.total_pnl ?? 0) >= 0 ? 'green' : 'red'}
         />
         <StatCard
           title={t('positions', language)}
           value={`${account?.position_count || 0}`}
           subtitle={`${t('margin', language)}: ${account?.margin_used_pct?.toFixed(1) || '0.0'}%`}
+          icon={<BriefcaseBusiness size={18} />}
+          accent="violet"
         />
       </div>
 
       {/* 主要内容区：左右分屏 */}
-      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+      <div className="dashboard-workspace">
         {/* 左侧：图表 + 持仓 */}
         <div className="space-y-6">
           {/* Chart Tabs (Equity / K-line) */}
@@ -944,31 +980,30 @@ function TraderDetailsPage({
               traderId={selectedTrader.trader_id}
               selectedSymbol={selectedChartSymbol}
               updateKey={chartUpdateKey}
-              exchangeId={getExchangeTypeFromList(selectedTrader.exchange_id, exchanges)}
+              exchangeId={getExchangeTypeFromList(
+                selectedTrader.exchange_id,
+                exchanges
+              )}
             />
           </div>
 
           {/* Current Positions */}
           <div
-            className="binance-card p-6 animate-slide-in"
+            className="binance-card dashboard-panel animate-slide-in"
             style={{ animationDelay: '0.15s' }}
           >
-            <div className="flex items-center justify-between mb-5">
-              <h2
-                className="text-xl font-bold flex items-center gap-2"
-                style={{ color: '#EAECEF' }}
-              >
-                📈 {t('currentPositions', language)}
-              </h2>
+            <div className="dashboard-panel__header">
+              <div>
+                <div className="dashboard-panel__eyebrow">
+                  {language === 'zh' ? '实时敞口' : 'Live exposure'}
+                </div>
+                <h2 className="dashboard-panel__title">
+                  <BriefcaseBusiness size={19} />
+                  {t('currentPositions', language)}
+                </h2>
+              </div>
               {positions && positions.length > 0 && (
-                <div
-                  className="text-xs px-3 py-1 rounded"
-                  style={{
-                    background: 'rgba(240, 185, 11, 0.1)',
-                    color: '#F0B90B',
-                    border: '1px solid rgba(240, 185, 11, 0.2)',
-                  }}
-                >
+                <div className="dashboard-count-badge">
                   {positions.length} {t('active', language)}
                 </div>
               )}
@@ -987,25 +1022,46 @@ function TraderDetailsPage({
                       <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-center">
                         {language === 'zh' ? '操作' : 'Action'}
                       </th>
-                      <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right" title={t('entryPrice', language)}>
+                      <th
+                        className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right"
+                        title={t('entryPrice', language)}
+                      >
                         {language === 'zh' ? '入场价' : 'Entry'}
                       </th>
-                      <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right" title={t('markPrice', language)}>
+                      <th
+                        className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right"
+                        title={t('markPrice', language)}
+                      >
                         {language === 'zh' ? '标记价' : 'Mark'}
                       </th>
-                      <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right" title={t('quantity', language)}>
+                      <th
+                        className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right"
+                        title={t('quantity', language)}
+                      >
                         {language === 'zh' ? '数量' : 'Qty'}
                       </th>
-                      <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right" title={t('positionValue', language)}>
+                      <th
+                        className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right"
+                        title={t('positionValue', language)}
+                      >
                         {language === 'zh' ? '价值' : 'Value'}
                       </th>
-                      <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-center" title={t('leverage', language)}>
+                      <th
+                        className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-center"
+                        title={t('leverage', language)}
+                      >
                         {language === 'zh' ? '杠杆' : 'Lev.'}
                       </th>
-                      <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right" title={t('unrealizedPnL', language)}>
+                      <th
+                        className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right"
+                        title={t('unrealizedPnL', language)}
+                      >
                         {language === 'zh' ? '未实现盈亏' : 'uPnL'}
                       </th>
-                      <th className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right" title={t('liqPrice', language)}>
+                      <th
+                        className="px-1 pb-3 font-semibold text-gray-400 whitespace-nowrap text-right"
+                        title={t('liqPrice', language)}
+                      >
                         {language === 'zh' ? '强平价' : 'Liq.'}
                       </th>
                     </tr>
@@ -1020,7 +1076,10 @@ function TraderDetailsPage({
                           setChartUpdateKey(Date.now())
                           // Smooth scroll to chart with ref
                           if (chartSectionRef.current) {
-                            chartSectionRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' })
+                            chartSectionRef.current.scrollIntoView({
+                              behavior: 'smooth',
+                              block: 'start',
+                            })
                           }
                         }}
                       >
@@ -1033,13 +1092,13 @@ function TraderDetailsPage({
                             style={
                               pos.side === 'long'
                                 ? {
-                                  background: 'rgba(14, 203, 129, 0.1)',
-                                  color: '#0ECB81',
-                                }
+                                    background: 'rgba(14, 203, 129, 0.1)',
+                                    color: '#0ECB81',
+                                  }
                                 : {
-                                  background: 'rgba(246, 70, 93, 0.1)',
-                                  color: '#F6465D',
-                                }
+                                    background: 'rgba(246, 70, 93, 0.1)',
+                                    color: '#F6465D',
+                                  }
                             }
                           >
                             {t(
@@ -1052,12 +1111,17 @@ function TraderDetailsPage({
                           <button
                             type="button"
                             onClick={(e) => {
-                              e.stopPropagation(); // Prevent row click
-                              handleClosePosition(pos.symbol, pos.side.toUpperCase())
+                              e.stopPropagation() // Prevent row click
+                              handleClosePosition(
+                                pos.symbol,
+                                pos.side.toUpperCase()
+                              )
                             }}
                             disabled={closingPosition === pos.symbol}
                             className="btn-danger inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-semibold transition-all hover:scale-105 disabled:opacity-50 disabled:cursor-not-allowed mx-auto"
-                            title={language === 'zh' ? '平仓' : 'Close Position'}
+                            title={
+                              language === 'zh' ? '平仓' : 'Close Position'
+                            }
                           >
                             {closingPosition === pos.symbol ? (
                               <Loader2 className="w-3 h-3 animate-spin" />
@@ -1121,8 +1185,8 @@ function TraderDetailsPage({
                 </table>
               </div>
             ) : (
-              <div className="text-center py-16" style={{ color: '#848E9C' }}>
-                <div className="text-6xl mb-4 opacity-50">📊</div>
+              <div className="dashboard-empty-state">
+                <BriefcaseBusiness size={34} />
                 <div className="text-lg font-semibold mb-2">
                   {t('noPositions', language)}
                 </div>
@@ -1137,25 +1201,16 @@ function TraderDetailsPage({
 
         {/* 右侧：Recent Decisions - 卡片容器 */}
         <div
-          className="binance-card p-6 animate-slide-in h-fit lg:sticky lg:top-24 lg:max-h-[calc(100vh-120px)]"
+          className="binance-card dashboard-panel animate-slide-in h-fit lg:sticky lg:top-20 lg:max-h-[calc(100vh-96px)]"
           style={{ animationDelay: '0.2s' }}
         >
           {/* 标题 */}
-          <div
-            className="flex items-center gap-3 mb-5 pb-4 border-b"
-            style={{ borderColor: '#2B3139' }}
-          >
-            <div
-              className="w-10 h-10 rounded-xl flex items-center justify-center text-xl"
-              style={{
-                background: 'linear-gradient(135deg, #6366F1 0%, #8B5CF6 100%)',
-                boxShadow: '0 4px 14px rgba(99, 102, 241, 0.4)',
-              }}
-            >
-              🧠
+          <div className="dashboard-panel__header dashboard-panel__header--divided">
+            <div className="dashboard-panel__icon dashboard-panel__icon--violet">
+              <BrainCircuit size={20} />
             </div>
             <div className="flex-1">
-              <h2 className="text-xl font-bold" style={{ color: '#EAECEF' }}>
+              <h2 className="dashboard-panel__title">
                 {t('recentDecisions', language)}
               </h2>
               {decisions && decisions.length > 0 && (
@@ -1168,12 +1223,7 @@ function TraderDetailsPage({
             <select
               value={decisionsLimit}
               onChange={(e) => onDecisionsLimitChange(Number(e.target.value))}
-              className="px-3 py-1.5 rounded-lg text-sm font-medium cursor-pointer transition-all"
-              style={{
-                background: '#2B3139',
-                color: '#EAECEF',
-                border: '1px solid #3C4043',
-              }}
+              className="dashboard-limit-select"
             >
               <option value={5}>5</option>
               <option value={10}>10</option>
@@ -1193,8 +1243,8 @@ function TraderDetailsPage({
                 <DecisionCard key={i} decision={decision} language={language} />
               ))
             ) : (
-              <div className="py-16 text-center">
-                <div className="text-6xl mb-4 opacity-30">🧠</div>
+              <div className="dashboard-empty-state">
+                <BrainCircuit size={34} />
                 <div
                   className="text-lg font-semibold mb-2"
                   style={{ color: '#EAECEF' }}
@@ -1210,7 +1260,6 @@ function TraderDetailsPage({
         </div>
         {/* 右侧结束 */}
       </div>
-
     </div>
   )
 }
@@ -1222,43 +1271,33 @@ function StatCard({
   change,
   positive,
   subtitle,
+  icon,
+  accent = 'yellow',
 }: {
   title: string
   value: string
   change?: number
   positive?: boolean
   subtitle?: string
+  icon: ReactNode
+  accent?: 'yellow' | 'blue' | 'green' | 'red' | 'violet'
 }) {
   return (
-    <div className="stat-card animate-fade-in">
-      <div
-        className="text-xs mb-2 mono uppercase tracking-wider"
-        style={{ color: '#848E9C' }}
-      >
-        {title}
+    <div className={`stat-card stat-card--${accent} animate-fade-in`}>
+      <div className="stat-card__header">
+        <div className="stat-card__title">{title}</div>
+        <div className="stat-card__icon">{icon}</div>
       </div>
-      <div
-        className="text-2xl font-bold mb-1 mono"
-        style={{ color: '#EAECEF' }}
-      >
-        {value}
-      </div>
+      <div className="stat-card__value">{value}</div>
       {change !== undefined && (
-        <div className="flex items-center gap-1">
-          <div
-            className="text-sm mono font-bold"
-            style={{ color: positive ? '#0ECB81' : '#F6465D' }}
-          >
-            {positive ? '▲' : '▼'} {positive ? '+' : ''}
-            {change.toFixed(2)}%
-          </div>
+        <div
+          className={`stat-card__change ${positive ? 'is-positive' : 'is-negative'}`}
+        >
+          {positive ? '▲' : '▼'} {positive ? '+' : ''}
+          {change.toFixed(2)}%
         </div>
       )}
-      {subtitle && (
-        <div className="text-xs mt-2 mono" style={{ color: '#848E9C' }}>
-          {subtitle}
-        </div>
-      )}
+      {subtitle && <div className="stat-card__subtitle">{subtitle}</div>}
     </div>
   )
 }

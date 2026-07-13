@@ -57,6 +57,7 @@ type OKXTrader struct {
 	cachedPositions     []map[string]interface{}
 	positionsCacheTime  time.Time
 	positionsCacheMutex sync.RWMutex
+	positionsFetchMutex sync.Mutex
 
 	// Instrument info cache
 	instrumentsCache      map[string]*OKXInstrument
@@ -306,9 +307,15 @@ func (t *OKXTrader) GetBalance() (map[string]interface{}, error) {
 
 // GetPositions gets all positions
 func (t *OKXTrader) GetPositions() ([]map[string]interface{}, error) {
+	return t.getPositions(false)
+}
+
+func (t *OKXTrader) getPositions(forceFresh bool) ([]map[string]interface{}, error) {
+	t.positionsFetchMutex.Lock()
+	defer t.positionsFetchMutex.Unlock()
 	// Check cache
 	t.positionsCacheMutex.RLock()
-	if t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
+	if !forceFresh && t.cachedPositions != nil && time.Since(t.positionsCacheTime) < t.cacheDuration {
 		t.positionsCacheMutex.RUnlock()
 		logger.Infof("✓ Using cached OKX positions")
 		return t.cachedPositions, nil
@@ -400,6 +407,11 @@ func (t *OKXTrader) GetPositions() ([]map[string]interface{}, error) {
 	t.positionsCacheMutex.Unlock()
 
 	return result, nil
+}
+
+// GetPositionsFresh bypasses the read cache for account reconciliation.
+func (t *OKXTrader) GetPositionsFresh() ([]map[string]interface{}, error) {
+	return t.getPositions(true)
 }
 
 // getInstrument gets instrument info
@@ -1097,6 +1109,148 @@ func (t *OKXTrader) CancelOrder(symbol, orderID string) error {
 	return nil
 }
 
+// ListOpenOrders returns both regular pending orders and conditional
+// stop-loss/take-profit orders for the whole swap account.
+func (t *OKXTrader) ListOpenOrders() ([]ExchangeOpenOrder, error) {
+	data, err := t.doRequest("GET", okxPendingOrdersPath+"?instType=SWAP", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list pending orders: %w", err)
+	}
+	var regular []struct {
+		OrdID     string `json:"ordId"`
+		InstID    string `json:"instId"`
+		PosSide   string `json:"posSide"`
+		State     string `json:"state"`
+		Sz        string `json:"sz"`
+		AccFillSz string `json:"accFillSz"`
+		AvgPx     string `json:"avgPx"`
+		Fee       string `json:"fee"`
+	}
+	if err := json.Unmarshal(data, &regular); err != nil {
+		return nil, err
+	}
+	result := make([]ExchangeOpenOrder, 0, len(regular))
+	for _, order := range regular {
+		qty, _ := strconv.ParseFloat(order.Sz, 64)
+		executed, _ := strconv.ParseFloat(order.AccFillSz, 64)
+		symbol := t.convertSymbolBack(order.InstID)
+		if inst, instErr := t.getInstrument(symbol); instErr == nil && inst.CtVal > 0 {
+			qty *= inst.CtVal
+			executed *= inst.CtVal
+		}
+		avgPrice, _ := strconv.ParseFloat(order.AvgPx, 64)
+		fee, _ := strconv.ParseFloat(order.Fee, 64)
+		result = append(result, ExchangeOpenOrder{
+			OrderID: order.OrdID, Symbol: symbol,
+			PositionSide: strings.ToUpper(order.PosSide), Status: normalizeOrderState(order.State),
+			Quantity: qty, ExecutedQty: executed, AvgPrice: avgPrice, Fee: -fee,
+		})
+	}
+
+	algoData, err := t.doRequest("GET", okxAlgoPendingPath+"?instType=SWAP&ordType=conditional", nil)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list conditional orders: %w", err)
+	}
+	var algos []struct {
+		AlgoID      string `json:"algoId"`
+		InstID      string `json:"instId"`
+		PosSide     string `json:"posSide"`
+		Side        string `json:"side"`
+		Sz          string `json:"sz"`
+		SLTriggerPx string `json:"slTriggerPx"`
+		TPTriggerPx string `json:"tpTriggerPx"`
+	}
+	if err := json.Unmarshal(algoData, &algos); err != nil {
+		return nil, err
+	}
+	for _, order := range algos {
+		qty, _ := strconv.ParseFloat(order.Sz, 64)
+		symbol := t.convertSymbolBack(order.InstID)
+		if inst, instErr := t.getInstrument(symbol); instErr == nil && inst.CtVal > 0 {
+			qty *= inst.CtVal
+		}
+		appendProtection := func(kind, trigger string) {
+			if trigger == "" {
+				return
+			}
+			triggerPrice, _ := strconv.ParseFloat(trigger, 64)
+			positionSide := strings.ToUpper(order.PosSide)
+			if positionSide == "" || positionSide == "NET" {
+				if strings.EqualFold(order.Side, "sell") {
+					positionSide = "LONG"
+				} else if strings.EqualFold(order.Side, "buy") {
+					positionSide = "SHORT"
+				}
+			}
+			result = append(result, ExchangeOpenOrder{
+				OrderID: order.AlgoID, Symbol: symbol,
+				PositionSide: positionSide, Kind: kind,
+				Status: OrderStateSubmitted, Quantity: qty, TriggerPrice: triggerPrice,
+			})
+		}
+		appendProtection("STOP_LOSS", order.SLTriggerPx)
+		appendProtection("TAKE_PROFIT", order.TPTriggerPx)
+	}
+	return result, nil
+}
+
+// ListRecentFills returns the immutable swap fill history for the account.
+func (t *OKXTrader) ListRecentFills(_ []string, since time.Time) ([]ExchangeFill, error) {
+	type fillDTO struct {
+		TradeID string `json:"tradeId"`
+		OrdID   string `json:"ordId"`
+		InstID  string `json:"instId"`
+		PosSide string `json:"posSide"`
+		Side    string `json:"side"`
+		FillPx  string `json:"fillPx"`
+		FillSz  string `json:"fillSz"`
+		Fee     string `json:"fee"`
+		FillPnl string `json:"fillPnl"`
+		Ts      string `json:"ts"`
+	}
+	var result []ExchangeFill
+	after := ""
+	for page := 0; page < 100; page++ {
+		path := fmt.Sprintf("/api/v5/trade/fills-history?instType=SWAP&begin=%d&limit=100", since.UnixMilli())
+		if after != "" {
+			path += "&after=" + after
+		}
+		data, err := t.doRequest("GET", path, nil)
+		if err != nil {
+			return nil, fmt.Errorf("failed to list recent fills: %w", err)
+		}
+		var fills []fillDTO
+		if err := json.Unmarshal(data, &fills); err != nil {
+			return nil, err
+		}
+		for _, fill := range fills {
+			symbol := t.convertSymbolBack(fill.InstID)
+			price, _ := strconv.ParseFloat(fill.FillPx, 64)
+			qty, _ := strconv.ParseFloat(fill.FillSz, 64)
+			fee, _ := strconv.ParseFloat(fill.Fee, 64)
+			pnl, _ := strconv.ParseFloat(fill.FillPnl, 64)
+			ts, _ := strconv.ParseInt(fill.Ts, 10, 64)
+			if inst, instErr := t.getInstrument(symbol); instErr == nil && inst.CtVal > 0 {
+				qty *= inst.CtVal
+			}
+			result = append(result, ExchangeFill{
+				TradeID: fill.TradeID, OrderID: fill.OrdID, Symbol: symbol,
+				PositionSide: strings.ToUpper(fill.PosSide), Side: strings.ToUpper(fill.Side),
+				Price: price, Quantity: qty, Fee: -fee, RealizedPnL: pnl, Time: time.UnixMilli(ts),
+			})
+		}
+		if len(fills) < 100 {
+			break
+		}
+		nextAfter := fills[len(fills)-1].TradeID
+		if nextAfter == "" || nextAfter == after {
+			break
+		}
+		after = nextAfter
+	}
+	return result, nil
+}
+
 // CancelStopOrders cancels stop loss and take profit orders
 func (t *OKXTrader) CancelStopOrders(symbol string) error {
 	return t.cancelAlgoOrders(symbol, "")
@@ -1228,7 +1382,7 @@ func (t *OKXTrader) GetClosedPnL(startTime time.Time, limit int) ([]ClosedPnLRec
 	// Build query path with parameters
 	path := fmt.Sprintf("/api/v5/account/positions-history?instType=SWAP&limit=%d", limit)
 	if !startTime.IsZero() {
-		path += fmt.Sprintf("&after=%d", startTime.UnixMilli())
+		path += fmt.Sprintf("&before=%d", startTime.UnixMilli())
 	}
 
 	data, err := t.doRequest("GET", path, nil)
@@ -1236,37 +1390,29 @@ func (t *OKXTrader) GetClosedPnL(startTime time.Time, limit int) ([]ClosedPnLRec
 		return nil, fmt.Errorf("failed to get positions history: %w", err)
 	}
 
-	var resp struct {
-		Code string `json:"code"`
-		Msg  string `json:"msg"`
-		Data []struct {
-			InstID        string `json:"instId"`        // Instrument ID (e.g., "BTC-USDT-SWAP")
-			Direction     string `json:"direction"`     // Position direction: "long" or "short"
-			OpenAvgPx     string `json:"openAvgPx"`     // Average open price
-			CloseAvgPx    string `json:"closeAvgPx"`    // Average close price
-			CloseTotalPos string `json:"closeTotalPos"` // Closed position quantity
-			RealizedPnl   string `json:"realizedPnl"`   // Realized PnL
-			Fee           string `json:"fee"`           // Total fee
-			FundingFee    string `json:"fundingFee"`    // Funding fee
-			Lever         string `json:"lever"`         // Leverage
-			CTime         string `json:"cTime"`         // Position open time
-			UTime         string `json:"uTime"`         // Position close time
-			Type          string `json:"type"`          // Close type: 1=close position, 2=partial close, 3=liquidation, 4=partial liquidation
-			PosId         string `json:"posId"`         // Position ID
-		} `json:"data"`
+	var positions []struct {
+		InstID        string `json:"instId"`        // Instrument ID (e.g., "BTC-USDT-SWAP")
+		Direction     string `json:"direction"`     // Position direction: "long" or "short"
+		OpenAvgPx     string `json:"openAvgPx"`     // Average open price
+		CloseAvgPx    string `json:"closeAvgPx"`    // Average close price
+		CloseTotalPos string `json:"closeTotalPos"` // Closed position quantity
+		RealizedPnl   string `json:"realizedPnl"`   // Realized PnL
+		Fee           string `json:"fee"`           // Total fee
+		FundingFee    string `json:"fundingFee"`    // Funding fee
+		Lever         string `json:"lever"`         // Leverage
+		CTime         string `json:"cTime"`         // Position open time
+		UTime         string `json:"uTime"`         // Position close time
+		Type          string `json:"type"`          // Close type: 1=close position, 2=partial close, 3=liquidation, 4=partial liquidation
+		PosId         string `json:"posId"`         // Position ID
 	}
 
-	if err := json.Unmarshal(data, &resp); err != nil {
+	if err := json.Unmarshal(data, &positions); err != nil {
 		return nil, fmt.Errorf("failed to parse response: %w", err)
 	}
 
-	if resp.Code != "0" {
-		return nil, fmt.Errorf("OKX API error: %s - %s", resp.Code, resp.Msg)
-	}
+	records := make([]ClosedPnLRecord, 0, len(positions))
 
-	records := make([]ClosedPnLRecord, 0, len(resp.Data))
-
-	for _, pos := range resp.Data {
+	for _, pos := range positions {
 		record := ClosedPnLRecord{}
 
 		// Convert instrument ID to standard format (BTC-USDT-SWAP -> BTCUSDT)

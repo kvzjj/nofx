@@ -190,6 +190,33 @@ func (s *PositionStore) ApplyPartialClose(id int64, remainingQty, realizedPnL, f
 	return nil
 }
 
+// UpdateOpenPositionProjection applies the current exchange position snapshot
+// to the local open-position projection.
+func (s *PositionStore) UpdateOpenPositionProjection(id int64, quantity, entryPrice float64, leverage int) error {
+	_, err := s.db.Exec(`
+		UPDATE trader_positions SET
+			quantity = ?, entry_price = ?, leverage = ?, updated_at = ?
+		WHERE id = ? AND status = 'OPEN'
+	`, quantity, entryPrice, leverage, time.Now().Format(time.RFC3339), id)
+	if err != nil {
+		return fmt.Errorf("failed to update open position projection: %w", err)
+	}
+	return nil
+}
+
+// SetOpenPositionProtectionStatus derives the position-level status from the
+// current exchange protection order snapshot.
+func (s *PositionStore) SetOpenPositionProtectionStatus(traderID, symbol, side, status string) error {
+	_, err := s.db.Exec(`
+		UPDATE trader_positions SET protection_status = ?, updated_at = ?
+		WHERE trader_id = ? AND symbol = ? AND side = ? AND status = 'OPEN'
+	`, status, time.Now().Format(time.RFC3339), traderID, symbol, side)
+	if err != nil {
+		return fmt.Errorf("failed to reconcile protection status: %w", err)
+	}
+	return nil
+}
+
 // UpdateProtectionStatus records whether an open position currently has both
 // stop-loss and take-profit protection installed.
 func (s *PositionStore) UpdateProtectionStatus(traderID, entryOrderID, status string) error {
@@ -249,6 +276,15 @@ func (s *PositionStore) GetOpenPositionBySymbol(traderID, symbol, side string) (
 
 	s.parsePositionTimes(&pos, entryTime, exitTime, createdAt, updatedAt)
 	return &pos, nil
+}
+
+func (s *PositionStore) HasOpenPositionForExchange(exchangeID, symbol, side string) (bool, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM trader_positions
+		WHERE exchange_id = ? AND symbol = ? AND side = ? AND status = 'OPEN'
+	`, exchangeID, symbol, side).Scan(&count)
+	return count > 0, err
 }
 
 // GetClosedPositions gets closed positions (historical records)

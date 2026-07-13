@@ -150,6 +150,7 @@ type FullDecision struct {
 	UserPrompt          string     `json:"user_prompt"`
 	CoTTrace            string     `json:"cot_trace"`
 	Decisions           []Decision `json:"decisions"`
+	ValidationErrors    []string   `json:"validation_errors,omitempty"`
 	RawResponse         string     `json:"raw_response"`
 	Timestamp           time.Time  `json:"timestamp"`
 	AIRequestDurationMs int64      `json:"ai_request_duration_ms,omitempty"`
@@ -1195,16 +1196,19 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, riskCon
 		}, fmt.Errorf("failed to extract decisions: %w", err)
 	}
 
-	if err := validateDecisions(decisions, accountEquity, riskControl, entryPrices); err != nil {
+	validDecisions, validationErrors := validateAndFilterDecisions(decisions, accountEquity, riskControl, entryPrices)
+	if len(validDecisions) == 0 && len(validationErrors) > 0 {
 		return &FullDecision{
-			CoTTrace:  cotTrace,
-			Decisions: decisions,
-		}, fmt.Errorf("decision validation failed: %w", err)
+			CoTTrace:         cotTrace,
+			Decisions:        []Decision{},
+			ValidationErrors: validationErrors,
+		}, fmt.Errorf("all decisions failed validation: %s", strings.Join(validationErrors, "; "))
 	}
 
 	return &FullDecision{
-		CoTTrace:  cotTrace,
-		Decisions: decisions,
+		CoTTrace:         cotTrace,
+		Decisions:        validDecisions,
+		ValidationErrors: validationErrors,
 	}, nil
 }
 
@@ -1371,13 +1375,24 @@ func marketPrices(data map[string]*market.Data) map[string]float64 {
 	return prices
 }
 
-func validateDecisions(decisions []Decision, accountEquity float64, riskControl store.RiskControlConfig, entryPrices map[string]float64) error {
+// validateAndFilterDecisions keeps independently valid decisions executable so
+// one malformed action cannot block risk-reducing actions in the same response.
+func validateAndFilterDecisions(decisions []Decision, accountEquity float64, riskControl store.RiskControlConfig, entryPrices map[string]float64) ([]Decision, []string) {
+	valid := make([]Decision, 0, len(decisions))
+	validationErrors := make([]string, 0)
+
 	for i := range decisions {
-		if err := validateDecision(&decisions[i], accountEquity, riskControl, entryPrices[decisions[i].Symbol]); err != nil {
-			return fmt.Errorf("decision #%d validation failed: %w", i+1, err)
+		decision := decisions[i]
+		if err := validateDecision(&decision, accountEquity, riskControl, entryPrices[decision.Symbol]); err != nil {
+			message := fmt.Sprintf("decision #%d (%s %s) validation failed: %v", i+1, decision.Symbol, decision.Action, err)
+			validationErrors = append(validationErrors, message)
+			logger.Infof("⚠️  [Decision Filter] %s", message)
+			continue
 		}
+		valid = append(valid, decision)
 	}
-	return nil
+
+	return valid, validationErrors
 }
 
 func validateDecision(d *Decision, accountEquity float64, riskControl store.RiskControlConfig, entryPrice float64) error {

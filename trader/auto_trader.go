@@ -550,6 +550,12 @@ func (at *AutoTrader) runCycle() error {
 		return fmt.Errorf("failed to get AI decision: %w", err)
 	}
 
+	for _, validationError := range aiDecision.ValidationErrors {
+		message := fmt.Sprintf("⚠ Skipped invalid AI decision: %s", validationError)
+		logger.Info(message)
+		record.ExecutionLog = append(record.ExecutionLog, message)
+	}
+
 	// // 5. Print system prompt
 	// logger.Infof("\n" + strings.Repeat("=", 70))
 	// logger.Infof("📋 System prompt [template: %s]", at.systemPromptTemplate)
@@ -2148,20 +2154,23 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 		partialQty := numberValue(orderResult["executedQty"])
 		partialPrice := numberValue(orderResult["avgPrice"])
 		partialFee := numberValue(orderResult["commission"])
-		finalizePending := func(reason string) {
-			canceled := at.cancelPendingOrder(symbol, orderID)
-			statePersisted := false
-			if status, err := at.trader.GetOrderStatus(symbol, orderID); err == nil {
-				if qty := numberValue(status["executedQty"]); qty > partialQty {
-					partialQty = qty
-					partialPrice = numberValue(status["avgPrice"])
-					partialFee = numberValue(status["commission"])
-				}
-				at.persistOrderState(orderID, symbol, action, quantity, partialQty, partialPrice, partialFee, normalizeOrderState(fmt.Sprint(status["status"])), nil)
-				statePersisted = true
+		finalizePending := func(reason string) bool {
+			at.cancelPendingOrder(symbol, orderID)
+			status, err := at.trader.GetOrderStatus(symbol, orderID)
+			if err != nil {
+				logger.Warnf("[%s] %s order %s cancellation is not confirmed: %v", at.name, reason, orderID, err)
+				return false
 			}
-			if canceled && !statePersisted {
-				at.persistOrderState(orderID, symbol, action, quantity, partialQty, partialPrice, partialFee, OrderStateCanceled, nil)
+			state := normalizeOrderState(fmt.Sprint(status["status"]))
+			if qty := numberValue(status["executedQty"]); qty > partialQty {
+				partialQty = qty
+				partialPrice = numberValue(status["avgPrice"])
+				partialFee = numberValue(status["commission"])
+			}
+			at.persistOrderState(orderID, symbol, action, quantity, partialQty, partialPrice, partialFee, state, nil)
+			if state != OrderStateFilled && state != OrderStateCanceled && state != OrderStateRejected {
+				logger.Warnf("[%s] %s order %s remains %s after cancel request; monitoring continues", at.name, reason, orderID, state)
+				return false
 			}
 			if partialQty > 0 && partialPrice > 0 {
 				at.recordPositionChange(orderID, symbol, positionSide, action, partialQty, partialPrice, leverage, 0, partialFee)
@@ -2169,6 +2178,7 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 					logger.Errorf("[%s] %s partial entry %s protection failed: %v", at.name, reason, orderID, err)
 				}
 			}
+			return true
 		}
 		for {
 			select {
@@ -2177,9 +2187,11 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 				logger.Infof("  ⏹ Stop monitoring pending order %s because trader stopped", orderID)
 				return
 			case <-timeout.C:
-				finalizePending("timed-out")
-				logger.Infof("  ⏰ Pending limit order %s was not filled within 30 minutes", orderID)
-				return
+				if finalizePending("timed-out") {
+					logger.Infof("  ⏰ Pending limit order %s reached a terminal exchange state after 30 minutes", orderID)
+					return
+				}
+				timeout.Reset(15 * time.Second)
 			case <-ticker.C:
 				status, err := at.trader.GetOrderStatus(symbol, orderID)
 				if err != nil {
