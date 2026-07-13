@@ -474,6 +474,13 @@ export interface RiskControlConfig {
   min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
   min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
   min_confidence: number;          // Min AI confidence to open position (AI guided)
+  max_daily_loss_pct?: number;     // Account daily mark-to-market loss circuit breaker
+  max_drawdown_pct?: number;       // Equity high-water drawdown circuit breaker
+  max_margin_usage_pct?: number;   // Projected account margin usage ceiling
+  min_liquidation_distance_pct?: number; // Minimum mark-to-liquidation distance
+  max_consecutive_failures?: number; // Consecutive execution failure circuit breaker
+  max_market_move_pct?: number;    // 1h/4h abnormal move circuit breaker
+  stop_trading_minutes?: number;   // Circuit breaker pause duration
   order_type?: 'market' | 'limit'; // Opening order type; close orders remain market
   limit_price_offset_pct?: number; // Limit order offset from current price in percent
 }

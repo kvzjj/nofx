@@ -78,9 +78,9 @@ type AutoTraderConfig struct {
 	// Account configuration
 	InitialBalance float64 // Initial balance (for P&L calculation, must be set manually)
 
-	// Risk control (only as hints, AI can make autonomous decisions)
-	MaxDailyLoss    float64       // Maximum daily loss percentage (hint)
-	MaxDrawdown     float64       // Maximum drawdown percentage (hint)
+	// Account-level hard circuit breakers. Strategy risk-control values take precedence.
+	MaxDailyLoss    float64       // Maximum daily loss percentage
+	MaxDrawdown     float64       // Maximum equity high-water drawdown percentage
 	StopTradingTime time.Duration // Pause duration after risk control triggers
 
 	// Position mode
@@ -117,6 +117,9 @@ type AutoTrader struct {
 	cycleNumber           int                      // Current cycle number
 	initialBalance        float64
 	dailyPnL              float64
+	dayStartEquity        float64
+	equityHighWater       float64
+	consecutiveFailures   int
 	customPrompt          string // Custom trading strategy prompt
 	overrideBasePrompt    bool   // Whether to override base prompt
 	lastResetTime         time.Time
@@ -132,6 +135,7 @@ type AutoTrader struct {
 	peakPnLCache          map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
 	peakPnLCacheMutex     sync.RWMutex       // Cache read-write lock
 	entryMutex            sync.Mutex         // Serializes risk snapshot and entry submission
+	riskMutex             sync.Mutex         // Protects account-level circuit-breaker state
 	lastBalanceSyncTime   time.Time          // Last balance sync time
 	userID                string             // User ID
 }
@@ -329,6 +333,8 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		strategyEngine:        strategyEngine,
 		cycleNumber:           cycleNumber,
 		initialBalance:        config.InitialBalance,
+		dayStartEquity:        config.InitialBalance,
+		equityHighWater:       config.InitialBalance,
 		lastResetTime:         time.Now(),
 		startTime:             time.Now(),
 		callCount:             0,
@@ -460,24 +466,20 @@ func (at *AutoTrader) runCycle() error {
 		Success:      true,
 	}
 
-	// 1. Check if trading needs to be stopped
-	if time.Now().Before(at.stopUntil) {
-		remaining := at.stopUntil.Sub(time.Now())
+	// A circuit breaker never prevents closing risk. Entry checks below enforce
+	// the pause while this cycle continues to process close decisions.
+	at.riskMutex.Lock()
+	stopUntil := at.stopUntil
+	at.riskMutex.Unlock()
+	if time.Now().Before(stopUntil) {
+		remaining := stopUntil.Sub(time.Now())
 		logger.Infof("⏸ Risk control: Trading paused, remaining %.0f minutes", remaining.Minutes())
 		record.Success = false
 		record.ErrorMessage = fmt.Sprintf("Risk control paused, remaining %.0f minutes", remaining.Minutes())
-		at.saveDecision(record)
-		return nil
+		record.ExecutionLog = append(record.ExecutionLog, record.ErrorMessage)
 	}
 
-	// 2. Reset daily P&L (reset every day)
-	if time.Since(at.lastResetTime) > 24*time.Hour {
-		at.dailyPnL = 0
-		at.lastResetTime = time.Now()
-		logger.Info("📅 Daily P&L reset")
-	}
-
-	// 4. Collect trading context
+	// 2. Collect trading context
 	ctx, err := at.buildTradingContext()
 	if err != nil {
 		record.Success = false
@@ -488,6 +490,9 @@ func (at *AutoTrader) runCycle() error {
 
 	// Save equity snapshot independently (decoupled from AI decision, used for drawing profit curve)
 	at.saveEquitySnapshot(ctx)
+	if at.evaluateAccountRisk(ctx) {
+		record.ExecutionLog = append(record.ExecutionLog, "Account circuit breaker active: new entries are blocked")
+	}
 
 	logger.Info(strings.Repeat("=", 70))
 	for _, coin := range ctx.CandidateCoins {
@@ -595,10 +600,12 @@ func (at *AutoTrader) runCycle() error {
 		}
 
 		if err := at.executeDecisionWithRecord(&d, &actionRecord); err != nil {
+			at.recordExecutionFailure(err)
 			logger.Infof("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			actionRecord.Error = err.Error()
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s failed: %v", d.Symbol, d.Action, err))
 		} else {
+			at.recordExecutionSuccess()
 			actionRecord.Success = true
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s succeeded", d.Symbol, d.Action))
 			// Brief delay after successful execution
@@ -872,6 +879,13 @@ func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, act
 }
 
 func (at *AutoTrader) enforceEntryDecision(d *decision.Decision) error {
+	at.riskMutex.Lock()
+	paused := time.Now().Before(at.stopUntil)
+	until := at.stopUntil
+	at.riskMutex.Unlock()
+	if paused {
+		return fmt.Errorf("❌ [RISK CONTROL] new entries paused until %s", until.Format(time.RFC3339))
+	}
 	if at.config.StrategyConfig == nil {
 		return nil
 	}
@@ -893,6 +907,17 @@ func (at *AutoTrader) enforceEntryDecision(d *decision.Decision) error {
 func isBTCETHSymbol(symbol string) bool {
 	symbol = strings.ToUpper(symbol)
 	return strings.HasPrefix(symbol, "BTC") || strings.HasPrefix(symbol, "ETH")
+}
+
+func validateEntryRiskBeforeSubmit(d *decision.Decision, entryPrice, quantity float64, strategyConfig *store.StrategyConfig) error {
+	minRiskRewardRatio := 0.0
+	if strategyConfig != nil {
+		minRiskRewardRatio = strategyConfig.RiskControl.MinRiskRewardRatio
+	}
+	if err := decision.ValidateEntryRisk(d, entryPrice, quantity, minRiskRewardRatio); err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %w", err)
+	}
+	return nil
 }
 
 // ExecuteDecision executes a trading decision from external sources.
@@ -943,8 +968,7 @@ func (at *AutoTrader) buildOpenOrderOptions(side string, currentPrice float64) O
 	return options
 }
 
-func (at *AutoTrader) openLong(symbol string, quantity float64, leverage int, currentPrice float64) (map[string]interface{}, error) {
-	options := at.buildOpenOrderOptions("long", currentPrice)
+func (at *AutoTrader) openLong(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
 	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
 		return advanced.OpenLongWithOptions(symbol, quantity, leverage, options)
 	}
@@ -954,8 +978,7 @@ func (at *AutoTrader) openLong(symbol string, quantity float64, leverage int, cu
 	return at.trader.OpenLong(symbol, quantity, leverage)
 }
 
-func (at *AutoTrader) openShort(symbol string, quantity float64, leverage int, currentPrice float64) (map[string]interface{}, error) {
-	options := at.buildOpenOrderOptions("short", currentPrice)
+func (at *AutoTrader) openShort(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
 	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
 		return advanced.OpenShortWithOptions(symbol, quantity, leverage, options)
 	}
@@ -993,11 +1016,12 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	} else if pending {
 		return fmt.Errorf("%s already has a pending long entry transaction", decision.Symbol)
 	}
-
-	// Get current price
 	marketData, err := market.Get(decision.Symbol)
 	if err != nil {
-		return err
+		at.riskMutex.Lock()
+		at.triggerRiskLocked("market data unavailable")
+		at.riskMutex.Unlock()
+		return fmt.Errorf("❌ [RISK CONTROL] cannot verify market conditions for %s: %w", decision.Symbol, err)
 	}
 
 	// Get balance (needed for multiple checks)
@@ -1008,6 +1032,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	availableBalance := 0.0
 	if avail, ok := balance["availableBalance"].(float64); ok {
 		availableBalance = avail
+	}
+	if err := at.enforceAccountEntryRisk(positions, balance, decision.PositionSizeUSD, decision.Leverage, marketData); err != nil {
+		return err
 	}
 
 	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
@@ -1033,10 +1060,26 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		return err
 	}
 
-	// Calculate quantity with adjusted position size
-	quantity := actualPositionSize / marketData.CurrentPrice
+	// Fetch directly from the exchange immediately before submission. Limit
+	// orders use their intended fill price; market orders use the latest price.
+	latestPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	if err != nil {
+		return fmt.Errorf("failed to refresh market price before opening %s: %w", decision.Symbol, err)
+	}
+	if latestPrice <= 0 {
+		return fmt.Errorf("invalid latest market price for %s: %.8f", decision.Symbol, latestPrice)
+	}
+	orderOptions := at.buildOpenOrderOptions("long", latestPrice)
+	expectedEntryPrice := latestPrice
+	if orderOptions.Type == OrderTypeLimit {
+		expectedEntryPrice = orderOptions.LimitPrice
+	}
+	quantity := actualPositionSize / expectedEntryPrice
+	if err := validateEntryRiskBeforeSubmit(decision, expectedEntryPrice, quantity, at.config.StrategyConfig); err != nil {
+		return err
+	}
 	actionRecord.Quantity = quantity
-	actionRecord.Price = marketData.CurrentPrice
+	actionRecord.Price = expectedEntryPrice
 
 	// Set margin mode
 	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
@@ -1045,7 +1088,7 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	// Open position
-	order, err := at.openLong(decision.Symbol, quantity, decision.Leverage, marketData.CurrentPrice)
+	order, err := at.openLong(decision.Symbol, quantity, decision.Leverage, orderOptions)
 	if err != nil {
 		return err
 	}
@@ -1058,10 +1101,10 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	logger.Infof("  ✓ Open order submitted, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
-	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0) {
+	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, expectedEntryPrice, decision.Leverage, 0) {
 		if isLimitOrderResult(order) {
 			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
-			at.monitorPendingEntryOrder(order, decision.Symbol, "open_long", "LONG", quantity, marketData.CurrentPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
+			at.monitorPendingEntryOrder(order, decision.Symbol, "open_long", "LONG", quantity, expectedEntryPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
 			return fmt.Errorf("open long order %s is SUBMITTED and awaiting fill/protection", getOrderIDString(order))
 		}
 		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
@@ -1113,11 +1156,12 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	} else if pending {
 		return fmt.Errorf("%s already has a pending short entry transaction", decision.Symbol)
 	}
-
-	// Get current price
 	marketData, err := market.Get(decision.Symbol)
 	if err != nil {
-		return err
+		at.riskMutex.Lock()
+		at.triggerRiskLocked("market data unavailable")
+		at.riskMutex.Unlock()
+		return fmt.Errorf("❌ [RISK CONTROL] cannot verify market conditions for %s: %w", decision.Symbol, err)
 	}
 
 	// Get balance (needed for multiple checks)
@@ -1128,6 +1172,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	availableBalance := 0.0
 	if avail, ok := balance["availableBalance"].(float64); ok {
 		availableBalance = avail
+	}
+	if err := at.enforceAccountEntryRisk(positions, balance, decision.PositionSizeUSD, decision.Leverage, marketData); err != nil {
+		return err
 	}
 
 	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
@@ -1153,10 +1200,26 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		return err
 	}
 
-	// Calculate quantity with adjusted position size
-	quantity := actualPositionSize / marketData.CurrentPrice
+	// Fetch directly from the exchange immediately before submission. Limit
+	// orders use their intended fill price; market orders use the latest price.
+	latestPrice, err := at.trader.GetMarketPrice(decision.Symbol)
+	if err != nil {
+		return fmt.Errorf("failed to refresh market price before opening %s: %w", decision.Symbol, err)
+	}
+	if latestPrice <= 0 {
+		return fmt.Errorf("invalid latest market price for %s: %.8f", decision.Symbol, latestPrice)
+	}
+	orderOptions := at.buildOpenOrderOptions("short", latestPrice)
+	expectedEntryPrice := latestPrice
+	if orderOptions.Type == OrderTypeLimit {
+		expectedEntryPrice = orderOptions.LimitPrice
+	}
+	quantity := actualPositionSize / expectedEntryPrice
+	if err := validateEntryRiskBeforeSubmit(decision, expectedEntryPrice, quantity, at.config.StrategyConfig); err != nil {
+		return err
+	}
 	actionRecord.Quantity = quantity
-	actionRecord.Price = marketData.CurrentPrice
+	actionRecord.Price = expectedEntryPrice
 
 	// Set margin mode
 	if err := at.trader.SetMarginMode(decision.Symbol, at.config.IsCrossMargin); err != nil {
@@ -1165,7 +1228,7 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	}
 
 	// Open position
-	order, err := at.openShort(decision.Symbol, quantity, decision.Leverage, marketData.CurrentPrice)
+	order, err := at.openShort(decision.Symbol, quantity, decision.Leverage, orderOptions)
 	if err != nil {
 		return err
 	}
@@ -1178,10 +1241,10 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	logger.Infof("  ✓ Open order submitted, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
-	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, marketData.CurrentPrice, decision.Leverage, 0) {
+	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, expectedEntryPrice, decision.Leverage, 0) {
 		if isLimitOrderResult(order) {
 			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
-			at.monitorPendingEntryOrder(order, decision.Symbol, "open_short", "SHORT", quantity, marketData.CurrentPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
+			at.monitorPendingEntryOrder(order, decision.Symbol, "open_short", "SHORT", quantity, expectedEntryPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
 			return fmt.Errorf("open short order %s is SUBMITTED and awaiting fill/protection", getOrderIDString(order))
 		}
 		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
@@ -1427,6 +1490,9 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 	isRunning := at.isRunning
 	startTime := at.startTime
 	at.lifecycleMutex.Unlock()
+	at.riskMutex.Lock()
+	stopUntil := at.stopUntil
+	at.riskMutex.Unlock()
 
 	aiProvider := "DeepSeek"
 	if at.config.UseQwen {
@@ -1444,7 +1510,7 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 		"call_count":      at.callCount,
 		"initial_balance": at.initialBalance,
 		"scan_interval":   at.config.ScanInterval.String(),
-		"stop_until":      at.stopUntil.Format(time.RFC3339),
+		"stop_until":      stopUntil.Format(time.RFC3339),
 		"last_reset_time": at.lastResetTime.Format(time.RFC3339),
 		"ai_provider":     aiProvider,
 	}
@@ -1559,6 +1625,9 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		marginUsedPct = (totalMarginUsed / totalEquity) * 100
 	}
 
+	at.riskMutex.Lock()
+	dailyPnL := at.dailyPnL
+	at.riskMutex.Unlock()
 	return map[string]interface{}{
 		// Core fields
 		"total_equity":      totalEquity,           // Account equity = wallet + unrealized
@@ -1570,7 +1639,7 @@ func (at *AutoTrader) GetAccountInfo() (map[string]interface{}, error) {
 		"total_pnl":       totalPnL,          // Total P&L = equity - initial
 		"total_pnl_pct":   totalPnLPct,       // Total P&L percentage
 		"initial_balance": at.initialBalance, // Initial balance
-		"daily_pnl":       at.dailyPnL,       // Daily P&L
+		"daily_pnl":       dailyPnL,          // Daily P&L
 
 		// Position information
 		"position_count":  len(positions),  // Position count
@@ -2336,6 +2405,149 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 // ============================================================================
 // Risk Control Helpers
 // ============================================================================
+
+// evaluateAccountRisk updates the mark-to-market account state once per cycle.
+// It deliberately blocks only future entries; close orders remain available.
+func (at *AutoTrader) evaluateAccountRisk(ctx *decision.Context) bool {
+	at.riskMutex.Lock()
+	defer at.riskMutex.Unlock()
+
+	now := time.Now().UTC()
+	if at.lastResetTime.IsZero() || now.Format("2006-01-02") != at.lastResetTime.UTC().Format("2006-01-02") {
+		at.dayStartEquity = ctx.Account.TotalEquity
+		at.dailyPnL = 0
+		at.lastResetTime = now
+	}
+	if at.dayStartEquity <= 0 {
+		at.dayStartEquity = ctx.Account.TotalEquity
+	}
+	if at.equityHighWater < ctx.Account.TotalEquity {
+		at.equityHighWater = ctx.Account.TotalEquity
+	}
+	at.dailyPnL = ctx.Account.TotalEquity - at.dayStartEquity
+
+	limits := at.accountRiskLimits()
+	if at.dayStartEquity > 0 && limits.maxDailyLoss > 0 && at.dailyPnL/at.dayStartEquity*100 <= -limits.maxDailyLoss {
+		at.triggerRiskLocked("daily loss limit")
+	}
+	if at.equityHighWater > 0 && limits.maxDrawdown > 0 && (at.equityHighWater-ctx.Account.TotalEquity)/at.equityHighWater*100 >= limits.maxDrawdown {
+		at.triggerRiskLocked("equity drawdown limit")
+	}
+	if limits.maxMarginUsage > 0 && ctx.Account.MarginUsedPct >= limits.maxMarginUsage {
+		at.triggerRiskLocked("margin usage limit")
+	}
+	for _, position := range ctx.Positions {
+		if liquidationDistancePct(position.MarkPrice, position.LiquidationPrice) <= limits.minLiquidationDistance && position.LiquidationPrice > 0 {
+			at.triggerRiskLocked("liquidation distance limit")
+			break
+		}
+	}
+	return time.Now().Before(at.stopUntil)
+}
+
+type accountRiskLimits struct {
+	maxDailyLoss, maxDrawdown, maxMarginUsage, minLiquidationDistance, maxMarketMove float64
+	maxFailures                                                                      int
+	stopFor                                                                          time.Duration
+}
+
+func (at *AutoTrader) accountRiskLimits() accountRiskLimits {
+	limits := accountRiskLimits{maxDailyLoss: at.config.MaxDailyLoss, maxDrawdown: at.config.MaxDrawdown, stopFor: at.config.StopTradingTime}
+	if at.config.StrategyConfig != nil {
+		r := at.config.StrategyConfig.RiskControl
+		limits.maxDailyLoss, limits.maxDrawdown = r.MaxDailyLossPct, r.MaxDrawdownPct
+		limits.maxMarginUsage, limits.minLiquidationDistance = r.MaxMarginUsagePct, r.MinLiquidationDistancePct
+		limits.maxFailures, limits.maxMarketMove = r.MaxConsecutiveFailures, r.MaxMarketMovePct
+		limits.stopFor = time.Duration(r.StopTradingMinutes) * time.Minute
+	}
+	return limits
+}
+
+func (at *AutoTrader) triggerRiskLocked(reason string) {
+	duration := at.accountRiskLimits().stopFor
+	if duration <= 0 {
+		duration = time.Hour
+	}
+	until := time.Now().Add(duration)
+	if until.After(at.stopUntil) {
+		at.stopUntil = until
+		logger.Warnf("🚨 [RISK CONTROL] %s triggered; new entries paused until %s", reason, until.Format(time.RFC3339))
+	}
+}
+
+func liquidationDistancePct(markPrice, liquidationPrice float64) float64 {
+	if markPrice <= 0 || liquidationPrice <= 0 {
+		return math.Inf(1)
+	}
+	return math.Abs(markPrice-liquidationPrice) / markPrice * 100
+}
+
+// enforceAccountEntryRisk is called while entryMutex is held, immediately
+// before order sizing, so a stale cycle snapshot cannot bypass a breaker.
+func (at *AutoTrader) enforceAccountEntryRisk(positions []map[string]interface{}, balance map[string]interface{}, positionSize float64, leverage int, data *market.Data) error {
+	limits := at.accountRiskLimits()
+	if data != nil && limits.maxMarketMove > 0 && (math.Abs(data.PriceChange1h) >= limits.maxMarketMove || math.Abs(data.PriceChange4h) >= limits.maxMarketMove) {
+		at.riskMutex.Lock()
+		at.triggerRiskLocked("abnormal market move")
+		at.riskMutex.Unlock()
+		return fmt.Errorf("❌ [RISK CONTROL] abnormal market move (1h %.2f%%, 4h %.2f%%)", data.PriceChange1h, data.PriceChange4h)
+	}
+
+	equity, ok := accountNumber(balance, "total_equity", "totalEquity", "totalEq", "accountEquity")
+	if !ok {
+		wallet, walletOK := accountNumber(balance, "totalWalletBalance", "wallet_balance", "walletBalance")
+		unrealized, _ := accountNumber(balance, "totalUnrealizedProfit", "unrealized_profit", "unrealized_pnl")
+		if walletOK {
+			equity = wallet + unrealized
+		}
+	}
+	marginUsed := 0.0
+	for _, position := range positions {
+		mark, _ := accountNumber(position, "markPrice", "mark_price")
+		liq, _ := accountNumber(position, "liquidationPrice", "liquidation_price")
+		if liq > 0 && liquidationDistancePct(mark, liq) <= limits.minLiquidationDistance {
+			at.riskMutex.Lock()
+			at.triggerRiskLocked("liquidation distance limit")
+			at.riskMutex.Unlock()
+			return fmt.Errorf("❌ [RISK CONTROL] an open position is too close to liquidation")
+		}
+		if used, ok := accountNumber(position, "margin_used", "marginUsed", "positionInitialMargin"); ok {
+			marginUsed += used
+			continue
+		}
+		quantity, _ := accountNumber(position, "positionAmt", "size", "quantity")
+		lev, hasLev := accountNumber(position, "leverage")
+		if mark > 0 && hasLev && lev > 0 {
+			marginUsed += math.Abs(quantity) * mark / lev
+		}
+	}
+	if leverage > 0 && equity > 0 && limits.maxMarginUsage > 0 && (marginUsed+positionSize/float64(leverage))/equity*100 > limits.maxMarginUsage {
+		return fmt.Errorf("❌ [RISK CONTROL] projected margin usage exceeds %.2f%%", limits.maxMarginUsage)
+	}
+	at.riskMutex.Lock()
+	paused := time.Now().Before(at.stopUntil)
+	at.riskMutex.Unlock()
+	if paused {
+		return fmt.Errorf("❌ [RISK CONTROL] new entries are paused")
+	}
+	return nil
+}
+
+func (at *AutoTrader) recordExecutionFailure(_ error) {
+	at.riskMutex.Lock()
+	defer at.riskMutex.Unlock()
+	at.consecutiveFailures++
+	limits := at.accountRiskLimits()
+	if limits.maxFailures > 0 && at.consecutiveFailures >= limits.maxFailures {
+		at.triggerRiskLocked(fmt.Sprintf("%d consecutive execution failures", at.consecutiveFailures))
+	}
+}
+
+func (at *AutoTrader) recordExecutionSuccess() {
+	at.riskMutex.Lock()
+	at.consecutiveFailures = 0
+	at.riskMutex.Unlock()
+}
 
 // enforcePositionSizeLimits caps an opening order by both the per-order and
 // aggregate open-position notional limits.

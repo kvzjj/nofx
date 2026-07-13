@@ -261,6 +261,40 @@ export function RiskControlEditor({
         </div>
       </div>
 
+      <div>
+        <div className="flex items-center gap-2 mb-4">
+          <AlertTriangle className="w-5 h-5" style={{ color: '#F6465D' }} />
+          <h3 className="font-medium" style={{ color: '#EAECEF' }}>
+            {language === 'zh' ? '账户熔断（代码强制）' : 'Account Circuit Breakers (CODE ENFORCED)'}
+          </h3>
+        </div>
+        <div className="grid grid-cols-2 gap-4">
+          {([
+            ['max_daily_loss_pct', language === 'zh' ? '日亏损上限 (%)' : 'Daily Loss Limit (%)', 5, 0.5],
+            ['max_drawdown_pct', language === 'zh' ? '权益回撤上限 (%)' : 'Equity Drawdown Limit (%)', 10, 0.5],
+            ['max_margin_usage_pct', language === 'zh' ? '保证金占用上限 (%)' : 'Margin Usage Limit (%)', 80, 1],
+            ['min_liquidation_distance_pct', language === 'zh' ? '最小清算距离 (%)' : 'Min Liquidation Distance (%)', 5, 0.5],
+            ['max_consecutive_failures', language === 'zh' ? '最大连续失败次数' : 'Max Consecutive Failures', 3, 1],
+            ['max_market_move_pct', language === 'zh' ? '异常行情阈值 (%)' : 'Abnormal Market Move (%)', 8, 0.5],
+            ['stop_trading_minutes', language === 'zh' ? '熔断暂停 (分钟)' : 'Circuit Breaker Pause (min)', 60, 1],
+          ] as const).map(([key, label, fallback, step]) => (
+            <div key={key} className="p-4 rounded-lg" style={{ background: '#0B0E11', border: '1px solid #F6465D' }}>
+              <label className="block text-sm mb-2" style={{ color: '#EAECEF' }}>{label}</label>
+              <input
+                type="number"
+                value={config[key] ?? fallback}
+                onChange={(e) => updateField(key, Number(e.target.value))}
+                disabled={disabled}
+                min={step}
+                step={step}
+                className="w-28 px-3 py-2 rounded"
+                style={{ background: '#1E2329', border: '1px solid #2B3139', color: '#EAECEF' }}
+              />
+            </div>
+          ))}
+        </div>
+      </div>
+
       {/* Entry Requirements */}
       <div>
         <div className="flex items-center gap-2 mb-4">

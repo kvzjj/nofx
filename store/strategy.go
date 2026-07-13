@@ -138,7 +138,7 @@ type ExternalDataSource struct {
 //
 // Risk Controls:
 //   - MinPositionSize: minimum position size in USDT (CODE ENFORCED)
-//   - MinRiskRewardRatio: min take_profit / stop_loss ratio (AI guided)
+//   - MinRiskRewardRatio: minimum reward/risk ratio at the expected entry price (CODE ENFORCED)
 //   - MinConfidence: min AI confidence to open position (AI guided)
 //
 // Order Execution:
@@ -160,10 +160,19 @@ type RiskControlConfig struct {
 	// Min position size in USDT (CODE ENFORCED)
 	MinPositionSize float64 `json:"min_position_size"`
 
-	// Min take_profit / stop_loss ratio (AI guided)
+	// Minimum reward/risk ratio at the expected entry price (CODE ENFORCED)
 	MinRiskRewardRatio float64 `json:"min_risk_reward_ratio"`
 	// Min AI confidence to open position (AI guided)
 	MinConfidence int `json:"min_confidence"`
+
+	// Account-level circuit breakers. All percentages are expressed as 0-100.
+	MaxDailyLossPct           float64 `json:"max_daily_loss_pct,omitempty"`
+	MaxDrawdownPct            float64 `json:"max_drawdown_pct,omitempty"`
+	MaxMarginUsagePct         float64 `json:"max_margin_usage_pct,omitempty"`
+	MinLiquidationDistancePct float64 `json:"min_liquidation_distance_pct,omitempty"`
+	MaxConsecutiveFailures    int     `json:"max_consecutive_failures,omitempty"`
+	MaxMarketMovePct          float64 `json:"max_market_move_pct,omitempty"`
+	StopTradingMinutes        int     `json:"stop_trading_minutes,omitempty"`
 
 	// Opening order type: "market" or "limit" (close orders remain market for safety)
 	OrderType string `json:"order_type,omitempty"`
@@ -581,6 +590,27 @@ func (config *StrategyConfig) ApplyDefaults() {
 	}
 	if config.RiskControl.MinConfidence <= 0 {
 		config.RiskControl.MinConfidence = 75
+	}
+	if config.RiskControl.MaxDailyLossPct <= 0 {
+		config.RiskControl.MaxDailyLossPct = 5
+	}
+	if config.RiskControl.MaxDrawdownPct <= 0 {
+		config.RiskControl.MaxDrawdownPct = 10
+	}
+	if config.RiskControl.MaxMarginUsagePct <= 0 {
+		config.RiskControl.MaxMarginUsagePct = 80
+	}
+	if config.RiskControl.MinLiquidationDistancePct <= 0 {
+		config.RiskControl.MinLiquidationDistancePct = 5
+	}
+	if config.RiskControl.MaxConsecutiveFailures <= 0 {
+		config.RiskControl.MaxConsecutiveFailures = 3
+	}
+	if config.RiskControl.MaxMarketMovePct <= 0 {
+		config.RiskControl.MaxMarketMovePct = 8
+	}
+	if config.RiskControl.StopTradingMinutes <= 0 {
+		config.RiskControl.StopTradingMinutes = 60
 	}
 }
 

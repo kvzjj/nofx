@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"math"
 	"net/http"
 	"nofx/logger"
 	"nofx/market"
@@ -277,6 +278,7 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		aiResponse,
 		ctx.Account.TotalEquity,
 		riskConfig,
+		marketPrices(ctx.MarketDataMap),
 	)
 
 	if decision != nil {
@@ -632,6 +634,8 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString(fmt.Sprintf("- Trading Leverage: Non-BTC/ETH instruments (including equity-linked contracts) max %dx | BTC/ETH max %dx\n",
 		riskControl.AltcoinMaxLeverage, riskControl.BTCETHMaxLeverage))
 	sb.WriteString(fmt.Sprintf("- Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss)\n", riskControl.MinRiskRewardRatio))
+	sb.WriteString("- Dollar Risk: abs(expected_entry_price - stop_loss) × quantity ≤ risk_usd\n")
+	sb.WriteString("- Quantity: position_size_usd / expected_entry_price; risk_usd is a hard maximum, not an estimate\n")
 	sb.WriteString(fmt.Sprintf("- Min Confidence: ≥%d to open position\n\n", riskControl.MinConfidence))
 
 	// 4. Trading frequency (editable)
@@ -1180,7 +1184,7 @@ func formatFloatSlice(values []float64) string {
 // AI Response Parsing
 // ============================================================================
 
-func parseFullDecisionResponse(aiResponse string, accountEquity float64, riskControl store.RiskControlConfig) (*FullDecision, error) {
+func parseFullDecisionResponse(aiResponse string, accountEquity float64, riskControl store.RiskControlConfig, entryPrices map[string]float64) (*FullDecision, error) {
 	cotTrace := extractCoTTrace(aiResponse)
 
 	decisions, err := extractDecisions(aiResponse)
@@ -1191,7 +1195,7 @@ func parseFullDecisionResponse(aiResponse string, accountEquity float64, riskCon
 		}, fmt.Errorf("failed to extract decisions: %w", err)
 	}
 
-	if err := validateDecisions(decisions, accountEquity, riskControl); err != nil {
+	if err := validateDecisions(decisions, accountEquity, riskControl, entryPrices); err != nil {
 		return &FullDecision{
 			CoTTrace:  cotTrace,
 			Decisions: decisions,
@@ -1357,16 +1361,26 @@ func compactArrayOpen(s string) string {
 // Decision Validation
 // ============================================================================
 
-func validateDecisions(decisions []Decision, accountEquity float64, riskControl store.RiskControlConfig) error {
+func marketPrices(data map[string]*market.Data) map[string]float64 {
+	prices := make(map[string]float64, len(data))
+	for symbol, item := range data {
+		if item != nil && item.CurrentPrice > 0 {
+			prices[symbol] = item.CurrentPrice
+		}
+	}
+	return prices
+}
+
+func validateDecisions(decisions []Decision, accountEquity float64, riskControl store.RiskControlConfig, entryPrices map[string]float64) error {
 	for i := range decisions {
-		if err := validateDecision(&decisions[i], accountEquity, riskControl); err != nil {
+		if err := validateDecision(&decisions[i], accountEquity, riskControl, entryPrices[decisions[i].Symbol]); err != nil {
 			return fmt.Errorf("decision #%d validation failed: %w", i+1, err)
 		}
 	}
 	return nil
 }
 
-func validateDecision(d *Decision, accountEquity float64, riskControl store.RiskControlConfig) error {
+func validateDecision(d *Decision, accountEquity float64, riskControl store.RiskControlConfig, entryPrice float64) error {
 	validActions := map[string]bool{
 		"open_long":   true,
 		"open_short":  true,
@@ -1411,42 +1425,56 @@ func validateDecision(d *Decision, accountEquity float64, riskControl store.Risk
 			return fmt.Errorf("stop loss and take profit must be greater than 0")
 		}
 
-		if d.Action == "open_long" {
-			if d.StopLoss >= d.TakeProfit {
-				return fmt.Errorf("for long positions, stop loss price must be less than take profit price")
-			}
-		} else {
-			if d.StopLoss <= d.TakeProfit {
-				return fmt.Errorf("for short positions, stop loss price must be greater than take profit price")
-			}
+		if entryPrice <= 0 {
+			return fmt.Errorf("current entry price unavailable for %s", d.Symbol)
 		}
+		quantity := d.PositionSizeUSD / entryPrice
+		if err := ValidateEntryRisk(d, entryPrice, quantity, riskControl.MinRiskRewardRatio); err != nil {
+			return err
+		}
+	}
 
-		var entryPrice float64
-		if d.Action == "open_long" {
-			entryPrice = d.StopLoss + (d.TakeProfit-d.StopLoss)*0.2
-		} else {
-			entryPrice = d.StopLoss - (d.StopLoss-d.TakeProfit)*0.2
-		}
+	return nil
+}
 
-		var riskPercent, rewardPercent, riskRewardRatio float64
-		if d.Action == "open_long" {
-			riskPercent = (entryPrice - d.StopLoss) / entryPrice * 100
-			rewardPercent = (d.TakeProfit - entryPrice) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
-		} else {
-			riskPercent = (d.StopLoss - entryPrice) / entryPrice * 100
-			rewardPercent = (entryPrice - d.TakeProfit) / entryPrice * 100
-			if riskPercent > 0 {
-				riskRewardRatio = rewardPercent / riskPercent
-			}
-		}
+// ValidateEntryRisk enforces stop placement, risk/reward, and the maximum USD
+// loss using the actual or expected entry price and submitted quantity.
+func ValidateEntryRisk(d *Decision, entryPrice, quantity, minRiskRewardRatio float64) error {
+	if entryPrice <= 0 {
+		return fmt.Errorf("entry price must be greater than 0: %.8f", entryPrice)
+	}
+	if quantity <= 0 {
+		return fmt.Errorf("quantity must be greater than 0: %.8f", quantity)
+	}
+	if d.RiskUSD <= 0 {
+		return fmt.Errorf("risk_usd must be greater than 0: %.2f", d.RiskUSD)
+	}
 
-		if riskRewardRatio < riskControl.MinRiskRewardRatio {
-			return fmt.Errorf("risk/reward ratio too low (%.2f:1), must be ≥%.1f:1 [risk: %.2f%% reward: %.2f%%] [stop loss: %.2f take profit: %.2f]",
-				riskRewardRatio, riskControl.MinRiskRewardRatio, riskPercent, rewardPercent, d.StopLoss, d.TakeProfit)
+	if d.Action == "open_long" {
+		if d.StopLoss >= entryPrice || d.TakeProfit <= entryPrice {
+			return fmt.Errorf("for long positions, prices must satisfy stop loss < entry < take profit [stop loss: %.8f entry: %.8f take profit: %.8f]", d.StopLoss, entryPrice, d.TakeProfit)
 		}
+	} else if d.Action == "open_short" {
+		if d.TakeProfit >= entryPrice || d.StopLoss <= entryPrice {
+			return fmt.Errorf("for short positions, prices must satisfy take profit < entry < stop loss [take profit: %.8f entry: %.8f stop loss: %.8f]", d.TakeProfit, entryPrice, d.StopLoss)
+		}
+	} else {
+		return fmt.Errorf("entry risk validation requires an opening action: %s", d.Action)
+	}
+
+	riskPerUnit := math.Abs(entryPrice - d.StopLoss)
+	rewardPerUnit := math.Abs(d.TakeProfit - entryPrice)
+	riskRewardRatio := rewardPerUnit / riskPerUnit
+	if riskRewardRatio < minRiskRewardRatio {
+		return fmt.Errorf("risk/reward ratio too low (%.2f:1), must be ≥%.1f:1 [entry: %.8f stop loss: %.8f take profit: %.8f]",
+			riskRewardRatio, minRiskRewardRatio, entryPrice, d.StopLoss, d.TakeProfit)
+	}
+
+	actualRiskUSD := riskPerUnit * quantity
+	tolerance := math.Max(1e-9, d.RiskUSD*1e-9)
+	if actualRiskUSD > d.RiskUSD+tolerance {
+		return fmt.Errorf("position risk %.2f USD exceeds allowed risk %.2f USD [entry: %.8f stop loss: %.8f quantity: %.8f]",
+			actualRiskUSD, d.RiskUSD, entryPrice, d.StopLoss, quantity)
 	}
 
 	return nil
