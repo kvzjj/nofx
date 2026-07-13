@@ -87,8 +87,12 @@ type AutoTraderConfig struct {
 	IsCrossMargin bool // true=cross margin mode, false=isolated margin mode
 
 	// Order execution
-	OrderType           OrderType
-	LimitPriceOffsetPct float64
+	OrderType                  OrderType
+	LimitPriceOffsetPct        float64
+	ProtectionRetries          int
+	ProtectionRetryDelay       time.Duration
+	ProtectionFailureAction    string
+	ProtectionFailureReducePct float64
 
 	// Competition visibility
 	ShowInCompetition bool // Whether to show in competition page
@@ -224,6 +228,24 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	}
 	if config.LimitPriceOffsetPct <= 0 {
 		config.LimitPriceOffsetPct = 0.05
+	}
+	if config.ProtectionRetries <= 0 {
+		config.ProtectionRetries = 3
+	}
+	if config.ProtectionRetryDelay <= 0 {
+		config.ProtectionRetryDelay = time.Second
+	}
+	if config.ProtectionFailureAction == "" {
+		config.ProtectionFailureAction = "close"
+	}
+	switch strings.ToLower(config.ProtectionFailureAction) {
+	case "close", "reduce", "keep_unprotected":
+	default:
+		logger.Warnf("[%s] unsupported protection failure action %q, falling back to close", config.Name, config.ProtectionFailureAction)
+		config.ProtectionFailureAction = "close"
+	}
+	if config.ProtectionFailureReducePct <= 0 || config.ProtectionFailureReducePct > 100 {
+		config.ProtectionFailureReducePct = 50
 	}
 
 	// Create corresponding trader based on configuration
@@ -966,6 +988,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 			return fmt.Errorf("❌ %s already has long position, close it first", decision.Symbol)
 		}
 	}
+	if pending, err := at.hasPendingEntry(decision.Symbol, "LONG"); err != nil {
+		return err
+	} else if pending {
+		return fmt.Errorf("%s already has a pending long entry transaction", decision.Symbol)
+	}
 
 	// Get current price
 	marketData, err := market.Get(decision.Symbol)
@@ -1028,30 +1055,34 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		actionRecord.OrderID = orderID
 	}
 
-	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
+	logger.Infof("  ✓ Open order submitted, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
 	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, marketData.CurrentPrice, decision.Leverage, 0) {
-		logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
 		if isLimitOrderResult(order) {
+			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
 			at.monitorPendingEntryOrder(order, decision.Symbol, "open_long", "LONG", quantity, marketData.CurrentPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
+			return fmt.Errorf("open long order %s is SUBMITTED and awaiting fill/protection", getOrderIDString(order))
 		}
-		return nil
+		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
+			orderID := getOrderIDString(order)
+			at.recordPositionChange(orderID, decision.Symbol, "LONG", "open_long", executedQty, avgPrice, decision.Leverage, 0, numberValue(order["commission"]))
+			if err := at.protectOpenedPosition(decision.Symbol, "LONG", executedQty, decision.StopLoss, decision.TakeProfit, orderID); err != nil {
+				return err
+			}
+			return fmt.Errorf("open long order %s only partially filled %.8f", orderID, executedQty)
+		}
+		return fmt.Errorf("open long order %s was not confirmed filled", getOrderIDString(order))
+	}
+	if filledQty := numberValue(order["executedQty"]); filledQty > 0 {
+		quantity = filledQty
 	}
 
 	// Record position opening time
 	posKey := decision.Symbol + "_long"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "LONG", quantity, decision.StopLoss); err != nil {
-		logger.Infof("  ⚠ Failed to set stop loss: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "LONG", quantity, decision.TakeProfit); err != nil {
-		logger.Infof("  ⚠ Failed to set take profit: %v", err)
-	}
-
-	return nil
+	return at.protectOpenedPosition(decision.Symbol, "LONG", quantity, decision.StopLoss, decision.TakeProfit, getOrderIDString(order))
 }
 
 // executeOpenShortWithRecord executes open short position and records detailed information
@@ -1076,6 +1107,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
 			return fmt.Errorf("❌ %s already has short position, close it first", decision.Symbol)
 		}
+	}
+	if pending, err := at.hasPendingEntry(decision.Symbol, "SHORT"); err != nil {
+		return err
+	} else if pending {
+		return fmt.Errorf("%s already has a pending short entry transaction", decision.Symbol)
 	}
 
 	// Get current price
@@ -1139,30 +1175,34 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		actionRecord.OrderID = orderID
 	}
 
-	logger.Infof("  ✓ Position opened successfully, order ID: %v, quantity: %.4f", order["orderId"], quantity)
+	logger.Infof("  ✓ Open order submitted, order ID: %v, quantity: %.4f", order["orderId"], quantity)
 
 	// Record order to database and poll for confirmation
 	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, marketData.CurrentPrice, decision.Leverage, 0) {
-		logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
 		if isLimitOrderResult(order) {
+			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
 			at.monitorPendingEntryOrder(order, decision.Symbol, "open_short", "SHORT", quantity, marketData.CurrentPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
+			return fmt.Errorf("open short order %s is SUBMITTED and awaiting fill/protection", getOrderIDString(order))
 		}
-		return nil
+		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
+			orderID := getOrderIDString(order)
+			at.recordPositionChange(orderID, decision.Symbol, "SHORT", "open_short", executedQty, avgPrice, decision.Leverage, 0, numberValue(order["commission"]))
+			if err := at.protectOpenedPosition(decision.Symbol, "SHORT", executedQty, decision.StopLoss, decision.TakeProfit, orderID); err != nil {
+				return err
+			}
+			return fmt.Errorf("open short order %s only partially filled %.8f", orderID, executedQty)
+		}
+		return fmt.Errorf("open short order %s was not confirmed filled", getOrderIDString(order))
+	}
+	if filledQty := numberValue(order["executedQty"]); filledQty > 0 {
+		quantity = filledQty
 	}
 
 	// Record position opening time
 	posKey := decision.Symbol + "_short"
 	at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
 
-	// Set stop loss and take profit
-	if err := at.trader.SetStopLoss(decision.Symbol, "SHORT", quantity, decision.StopLoss); err != nil {
-		logger.Infof("  ⚠ Failed to set stop loss: %v", err)
-	}
-	if err := at.trader.SetTakeProfit(decision.Symbol, "SHORT", quantity, decision.TakeProfit); err != nil {
-		logger.Infof("  ⚠ Failed to set take profit: %v", err)
-	}
-
-	return nil
+	return at.protectOpenedPosition(decision.Symbol, "SHORT", quantity, decision.StopLoss, decision.TakeProfit, getOrderIDString(order))
 }
 
 // executeCloseLongWithRecord executes close long position and records detailed information
@@ -1205,8 +1245,19 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 		actionRecord.OrderID = orderID
 	}
 
-	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, marketData.CurrentPrice, 0, entryPrice)
+	// Record only after the exchange confirms the close fill.
+	if !at.recordAndConfirmOrder(order, decision.Symbol, "close_long", quantity, marketData.CurrentPrice, 0, entryPrice) {
+		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
+			at.recordPositionChange(getOrderIDString(order), decision.Symbol, "LONG", "close_long", executedQty, avgPrice, 0, entryPrice, numberValue(order["commission"]))
+			return fmt.Errorf("close long order %s only partially filled %.8f", getOrderIDString(order), executedQty)
+		}
+		return fmt.Errorf("close long order %s was not confirmed filled", getOrderIDString(order))
+	}
+	if filledQty := numberValue(order["executedQty"]); quantity <= 0 || filledQty+1e-9 >= quantity {
+		at.cancelPositionOrders(decision.Symbol, "LONG")
+	} else {
+		return fmt.Errorf("close long order %s only filled %.8f of %.8f", getOrderIDString(order), filledQty, quantity)
+	}
 
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
@@ -1252,8 +1303,19 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 		actionRecord.OrderID = orderID
 	}
 
-	// Record order to database and poll for confirmation
-	at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, marketData.CurrentPrice, 0, entryPrice)
+	// Record only after the exchange confirms the close fill.
+	if !at.recordAndConfirmOrder(order, decision.Symbol, "close_short", quantity, marketData.CurrentPrice, 0, entryPrice) {
+		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
+			at.recordPositionChange(getOrderIDString(order), decision.Symbol, "SHORT", "close_short", executedQty, avgPrice, 0, entryPrice, numberValue(order["commission"]))
+			return fmt.Errorf("close short order %s only partially filled %.8f", getOrderIDString(order), executedQty)
+		}
+		return fmt.Errorf("close short order %s was not confirmed filled", getOrderIDString(order))
+	}
+	if filledQty := numberValue(order["executedQty"]); quantity <= 0 || filledQty+1e-9 >= quantity {
+		at.cancelPositionOrders(decision.Symbol, "SHORT")
+	} else {
+		return fmt.Errorf("close short order %s only filled %.8f of %.8f", getOrderIDString(order), filledQty, quantity)
+	}
 
 	logger.Infof("  ✓ Position closed successfully")
 	return nil
@@ -1712,22 +1774,27 @@ func (at *AutoTrader) checkPositionDrawdown() {
 
 // emergencyClosePosition emergency close position function
 func (at *AutoTrader) emergencyClosePosition(symbol, side string) error {
+	var order map[string]interface{}
+	var err error
+	var action string
 	switch side {
 	case "long":
-		order, err := at.trader.CloseLong(symbol, 0) // 0 = close all
-		if err != nil {
-			return err
-		}
-		logger.Infof("✅ Emergency close long position succeeded, order ID: %v", order["orderId"])
+		order, err = at.trader.CloseLong(symbol, 0) // 0 = close all
+		action = "close_long"
 	case "short":
-		order, err := at.trader.CloseShort(symbol, 0) // 0 = close all
-		if err != nil {
-			return err
-		}
-		logger.Infof("✅ Emergency close short position succeeded, order ID: %v", order["orderId"])
+		order, err = at.trader.CloseShort(symbol, 0) // 0 = close all
+		action = "close_short"
 	default:
 		return fmt.Errorf("unknown position direction: %s", side)
 	}
+	if err != nil {
+		return err
+	}
+	if !at.recordAndConfirmOrder(order, symbol, action, 0, 0, 0, 0) {
+		return fmt.Errorf("emergency close order %s was not confirmed filled", getOrderIDString(order))
+	}
+	at.cancelPositionOrders(symbol, strings.ToUpper(side))
+	logger.Infof("✅ Emergency close %s position confirmed, order ID: %v", side, order["orderId"])
 
 	return nil
 }
@@ -1789,28 +1856,259 @@ func getOrderIDString(orderResult map[string]interface{}) string {
 	}
 }
 
+func normalizeOrderState(status string) OrderState {
+	switch strings.ToUpper(status) {
+	case "FILLED":
+		return OrderStateFilled
+	case "PARTIALLY_FILLED", "PARTIAL":
+		return OrderStatePartial
+	case "CANCELED", "CANCELLED", "EXPIRED":
+		return OrderStateCanceled
+	case "REJECTED", "FAILED":
+		return OrderStateRejected
+	case "NEW", "OPEN", "LIVE", "PENDING", "SUBMITTED":
+		return OrderStateSubmitted
+	default:
+		return OrderStateSubmitted
+	}
+}
+
+func (at *AutoTrader) updateProtectionStatus(entryOrderID, status string) {
+	if at.store == nil || entryOrderID == "" || entryOrderID == "0" {
+		return
+	}
+	if err := at.store.Position().UpdateProtectionStatus(at.id, entryOrderID, status); err != nil {
+		logger.Errorf("[%s] failed to persist protection status %s for order %s: %v", at.name, status, entryOrderID, err)
+	}
+}
+
+func orderPositionSide(action string) string {
+	if strings.HasSuffix(action, "long") {
+		return "LONG"
+	}
+	if strings.HasSuffix(action, "short") {
+		return "SHORT"
+	}
+	return ""
+}
+
+func (at *AutoTrader) hasPendingEntry(symbol, positionSide string) (bool, error) {
+	if at.store == nil {
+		return false, nil
+	}
+	pending, err := at.store.Execution().HasActiveEntry(at.id, at.exchangeID, symbol, positionSide)
+	if err != nil {
+		return false, fmt.Errorf("failed to check pending entry orders: %w", err)
+	}
+	return pending, nil
+}
+
+func (at *AutoTrader) persistOrderState(orderID, symbol, action string, requestedQty, executedQty, avgPrice, fee float64, state OrderState, lastErr error) {
+	if at.store == nil {
+		return
+	}
+	errText := ""
+	if lastErr != nil {
+		errText = lastErr.Error()
+	}
+	order := store.TradeOrder{
+		TraderID: at.id, ExchangeID: at.exchangeID, ExchangeType: at.exchange,
+		OrderID: orderID, Symbol: symbol, PositionSide: orderPositionSide(action), Action: action,
+		RequestedQty: requestedQty, ExecutedQty: executedQty, AvgPrice: avgPrice, Fee: fee,
+		Status: string(state), LastError: errText,
+	}
+	if err := at.store.Execution().UpsertOrder(order); err != nil {
+		logger.Errorf("[%s] failed to persist order %s state %s: %v", at.name, orderID, state, err)
+		return
+	}
+	if executedQty > 0 && avgPrice > 0 {
+		if err := at.store.Execution().RecordFill(order); err != nil {
+			logger.Errorf("[%s] failed to persist fill for order %s: %v", at.name, orderID, err)
+		}
+	}
+}
+
+func (at *AutoTrader) persistProtection(entryOrderID, symbol, positionSide, kind string, quantity, triggerPrice float64, status string, attempt int, lastErr error) {
+	if at.store == nil {
+		return
+	}
+	errText := ""
+	if lastErr != nil {
+		errText = lastErr.Error()
+	}
+	if err := at.store.Execution().UpsertProtection(at.id, at.exchangeID, entryOrderID, symbol, positionSide, kind, quantity, triggerPrice, status, attempt, errText); err != nil {
+		logger.Errorf("[%s] failed to persist %s protection for order %s: %v", at.name, kind, entryOrderID, err)
+	}
+}
+
+func (at *AutoTrader) cancelPositionOrders(symbol, positionSide string) {
+	canceler, ok := at.trader.(PositionOrderCanceler)
+	if !ok {
+		return
+	}
+	if err := canceler.CancelPositionOrders(symbol, positionSide); err != nil {
+		logger.Errorf("[%s] failed to cancel %s %s owned orders: %v", at.name, symbol, positionSide, err)
+	}
+}
+
+func (at *AutoTrader) cancelPendingOrder(symbol, orderID string) bool {
+	canceler, ok := at.trader.(SingleOrderCanceler)
+	if !ok {
+		logger.Errorf("[%s] exchange %s cannot cancel timed-out order %s individually", at.name, at.exchange, orderID)
+		return false
+	}
+	if err := canceler.CancelOrder(symbol, orderID); err != nil {
+		logger.Errorf("[%s] failed to cancel pending order %s: %v", at.name, orderID, err)
+		return false
+	}
+	return true
+}
+
+// protectOpenedPosition completes the opening saga. A position is not a
+// successful business operation until both protective legs are installed.
+func (at *AutoTrader) protectOpenedPosition(symbol, positionSide string, quantity, stopLoss, takeProfit float64, entryOrderID string) error {
+	at.updateProtectionStatus(entryOrderID, "PROTECTING")
+	retries := at.config.ProtectionRetries
+	if retries <= 0 {
+		retries = 3
+	}
+	retryDelay := at.config.ProtectionRetryDelay
+	if retryDelay <= 0 {
+		retryDelay = time.Second
+	}
+
+	var stopErr, takeErr error
+	stopInstalled := false
+	takeInstalled := false
+	for attempt := 1; attempt <= retries; attempt++ {
+		if !stopInstalled {
+			stopErr = at.trader.SetStopLoss(symbol, positionSide, quantity, stopLoss)
+			stopInstalled = stopErr == nil
+			status := "FAILED"
+			if stopInstalled {
+				status = "ACTIVE"
+			}
+			at.persistProtection(entryOrderID, symbol, positionSide, "STOP_LOSS", quantity, stopLoss, status, attempt, stopErr)
+		}
+		if !takeInstalled {
+			takeErr = at.trader.SetTakeProfit(symbol, positionSide, quantity, takeProfit)
+			takeInstalled = takeErr == nil
+			status := "FAILED"
+			if takeInstalled {
+				status = "ACTIVE"
+			}
+			at.persistProtection(entryOrderID, symbol, positionSide, "TAKE_PROFIT", quantity, takeProfit, status, attempt, takeErr)
+		}
+		if stopInstalled && takeInstalled {
+			at.updateProtectionStatus(entryOrderID, "PROTECTED")
+			return nil
+		}
+		if attempt < retries {
+			logger.Warnf("[%s] protection attempt %d/%d failed for %s %s (stop=%v, take=%v)", at.name, attempt, retries, symbol, positionSide, stopErr, takeErr)
+			time.Sleep(retryDelay)
+		}
+	}
+
+	at.updateProtectionStatus(entryOrderID, "UNPROTECTED")
+	protectionErr := fmt.Errorf("position %s %s is UNPROTECTED after %d attempts (stop=%v, take=%v)", symbol, positionSide, retries, stopErr, takeErr)
+	logger.Errorf("[%s] CRITICAL: %v", at.name, protectionErr)
+
+	failureAction := at.config.ProtectionFailureAction
+	if failureAction == "" {
+		failureAction = "close"
+	}
+	if strings.EqualFold(failureAction, "close") || strings.EqualFold(failureAction, "reduce") {
+		closeQuantity := quantity
+		isReduction := strings.EqualFold(failureAction, "reduce")
+		if isReduction {
+			closeQuantity = quantity * at.config.ProtectionFailureReducePct / 100
+		}
+		var order map[string]interface{}
+		var err error
+		closeArgument := 0.0
+		if isReduction {
+			closeArgument = closeQuantity
+		}
+		if positionSide == "LONG" {
+			order, err = at.trader.CloseLong(symbol, closeArgument)
+		} else {
+			order, err = at.trader.CloseShort(symbol, closeArgument)
+		}
+		if err != nil {
+			return fmt.Errorf("%w; automatic close submission failed: %v", protectionErr, err)
+		}
+		if !at.recordAndConfirmOrder(order, symbol, "close_"+strings.ToLower(positionSide), closeQuantity, 0, 0, 0) {
+			if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
+				at.recordPositionChange(getOrderIDString(order), symbol, positionSide, "close_"+strings.ToLower(positionSide), executedQty, avgPrice, 0, 0, numberValue(order["commission"]))
+				return fmt.Errorf("%w; automatic close order %s only partially filled %.8f", protectionErr, getOrderIDString(order), executedQty)
+			}
+			return fmt.Errorf("%w; automatic close order %s was not confirmed filled", protectionErr, getOrderIDString(order))
+		}
+		if filledQty := numberValue(order["executedQty"]); filledQty+1e-9 < closeQuantity {
+			return fmt.Errorf("%w; automatic close order %s only filled %.8f of %.8f", protectionErr, getOrderIDString(order), filledQty, closeQuantity)
+		}
+		if isReduction {
+			logger.Errorf("[%s] unprotected %s %s was automatically reduced by %.2f%% and remains UNPROTECTED", at.name, symbol, positionSide, at.config.ProtectionFailureReducePct)
+		} else {
+			at.cancelPositionOrders(symbol, positionSide)
+			logger.Errorf("[%s] unprotected %s %s was automatically closed", at.name, symbol, positionSide)
+		}
+	}
+	return protectionErr
+}
+
 func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{}, symbol, action, positionSide string, quantity, fallbackPrice float64, leverage int, stopLoss, takeProfit float64) {
 	orderID := getOrderIDString(orderResult)
 	if orderID == "" || orderID == "0" {
 		return
 	}
+	at.persistOrderState(orderID, symbol, action, quantity, 0, 0, 0, OrderStateSubmitted, nil)
 	at.lifecycleMutex.Lock()
 	stopCh := at.stopMonitorCh
 	at.lifecycleMutex.Unlock()
 
+	at.monitorWg.Add(1)
 	go func() {
+		defer at.monitorWg.Done()
 		logger.Infof("  ⏳ Monitoring pending limit order %s for %s %s", orderID, symbol, action)
 		ticker := time.NewTicker(15 * time.Second)
 		defer ticker.Stop()
 		timeout := time.NewTimer(30 * time.Minute)
 		defer timeout.Stop()
 
+		partialQty := numberValue(orderResult["executedQty"])
+		partialPrice := numberValue(orderResult["avgPrice"])
+		partialFee := numberValue(orderResult["commission"])
+		finalizePending := func(reason string) {
+			canceled := at.cancelPendingOrder(symbol, orderID)
+			statePersisted := false
+			if status, err := at.trader.GetOrderStatus(symbol, orderID); err == nil {
+				if qty := numberValue(status["executedQty"]); qty > partialQty {
+					partialQty = qty
+					partialPrice = numberValue(status["avgPrice"])
+					partialFee = numberValue(status["commission"])
+				}
+				at.persistOrderState(orderID, symbol, action, quantity, partialQty, partialPrice, partialFee, normalizeOrderState(fmt.Sprint(status["status"])), nil)
+				statePersisted = true
+			}
+			if canceled && !statePersisted {
+				at.persistOrderState(orderID, symbol, action, quantity, partialQty, partialPrice, partialFee, OrderStateCanceled, nil)
+			}
+			if partialQty > 0 && partialPrice > 0 {
+				at.recordPositionChange(orderID, symbol, positionSide, action, partialQty, partialPrice, leverage, 0, partialFee)
+				if err := at.protectOpenedPosition(symbol, positionSide, partialQty, stopLoss, takeProfit, orderID); err != nil {
+					logger.Errorf("[%s] %s partial entry %s protection failed: %v", at.name, reason, orderID, err)
+				}
+			}
+		}
 		for {
 			select {
 			case <-stopCh:
+				finalizePending("stopped")
 				logger.Infof("  ⏹ Stop monitoring pending order %s because trader stopped", orderID)
 				return
 			case <-timeout.C:
+				finalizePending("timed-out")
 				logger.Infof("  ⏰ Pending limit order %s was not filled within 30 minutes", orderID)
 				return
 			case <-ticker.C:
@@ -1821,31 +2119,41 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 				}
 
 				statusStr, _ := status["status"].(string)
-				switch statusStr {
-				case "FILLED":
-					actualPrice := fallbackPrice
-					actualQty := quantity
-					var fee float64
-					if avgPrice, ok := status["avgPrice"].(float64); ok && avgPrice > 0 {
-						actualPrice = avgPrice
-					}
-					if execQty, ok := status["executedQty"].(float64); ok && execQty > 0 {
-						actualQty = execQty
-					}
-					if commission, ok := status["commission"].(float64); ok {
-						fee = commission
+				state := normalizeOrderState(statusStr)
+				executedQty := numberValue(status["executedQty"])
+				avgPrice := numberValue(status["avgPrice"])
+				fee := numberValue(status["commission"])
+				if executedQty > partialQty {
+					partialQty, partialPrice, partialFee = executedQty, avgPrice, fee
+				}
+				at.persistOrderState(orderID, symbol, action, quantity, executedQty, avgPrice, fee, state, nil)
+				switch state {
+				case OrderStateFilled:
+					if avgPrice <= 0 || executedQty <= 0 {
+						logger.Errorf("[%s] pending order %s reported FILLED without valid fill data", at.name, orderID)
+						return
 					}
 
-					at.recordPositionChange(orderID, symbol, positionSide, action, actualQty, actualPrice, leverage, 0, fee)
-					if err := at.trader.SetStopLoss(symbol, positionSide, actualQty, stopLoss); err != nil {
-						logger.Infof("  ⚠ Failed to set stop loss after pending fill: %v", err)
-					}
-					if err := at.trader.SetTakeProfit(symbol, positionSide, actualQty, takeProfit); err != nil {
-						logger.Infof("  ⚠ Failed to set take profit after pending fill: %v", err)
+					at.recordPositionChange(orderID, symbol, positionSide, action, executedQty, avgPrice, leverage, 0, fee)
+					if err := at.protectOpenedPosition(symbol, positionSide, executedQty, stopLoss, takeProfit, orderID); err != nil {
+						logger.Errorf("[%s] pending entry order %s protection failed: %v", at.name, orderID, err)
+						return
 					}
 					logger.Infof("  ✅ Pending limit order filled and protected: %s %s order=%s", symbol, positionSide, orderID)
 					return
-				case "CANCELED", "EXPIRED", "REJECTED":
+				case OrderStatePartial:
+					logger.Warnf("  Partial fill detected for pending order %s: executedQty=%.8f", orderID, numberValue(status["executedQty"]))
+				case OrderStateCanceled, OrderStateRejected:
+					if executed := executedQty; executed > 0 {
+						if avgPrice > 0 {
+							at.recordPositionChange(orderID, symbol, positionSide, action, executed, avgPrice, leverage, 0, fee)
+						} else {
+							logger.Errorf("[%s] terminal partial fill %s has no average price; position projection deferred", at.name, orderID)
+						}
+						if err := at.protectOpenedPosition(symbol, positionSide, executed, stopLoss, takeProfit, orderID); err != nil {
+							logger.Errorf("[%s] terminal partial fill %s protection failed: %v", at.name, orderID, err)
+						}
+					}
 					logger.Infof("  ⚠️ Pending limit order %s ended with status %s", orderID, statusStr)
 					return
 				}
@@ -1859,23 +2167,12 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 // action: open_long, open_short, close_long, close_short
 // entryPrice: entry price when closing (0 when opening)
 func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, symbol, action string, quantity float64, price float64, leverage int, entryPrice float64) bool {
-	isLimitOrder := false
-	if orderType, ok := orderResult["orderType"].(string); ok && orderType == string(OrderTypeLimit) {
-		isLimitOrder = true
-	}
-	if at.store == nil {
-		if isLimitOrder {
-			logger.Infof("  ⏳ Limit order submitted, store is unavailable so filled state cannot be confirmed")
-			return false
-		}
-		return true
-	}
-
 	orderID := getOrderIDString(orderResult)
 	if orderID == "" || orderID == "0" {
 		logger.Infof("  ⚠️ Order ID is empty, skipping record")
 		return false
 	}
+	at.persistOrderState(orderID, symbol, action, quantity, 0, 0, 0, OrderStateSubmitted, nil)
 
 	// Determine positionSide
 	var positionSide string
@@ -1887,10 +2184,11 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 	}
 
 	// Poll order status to get actual fill price, quantity and fee
-	var actualPrice = price  // fallback to market price
-	var actualQty = quantity // fallback to requested quantity
+	var actualPrice float64
+	var actualQty float64
 	var fee float64
 	orderFilled := false
+	lastState := OrderStateSubmitted
 
 	// Wait for order to be filled and get actual fill data
 	time.Sleep(500 * time.Millisecond)
@@ -1898,37 +2196,59 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 		status, err := at.trader.GetOrderStatus(symbol, orderID)
 		if err == nil {
 			statusStr, _ := status["status"].(string)
-			if statusStr == "FILLED" {
+			lastState = normalizeOrderState(statusStr)
+			observedQty := numberValue(status["executedQty"])
+			observedPrice := numberValue(status["avgPrice"])
+			observedFee := numberValue(status["commission"])
+			orderResult["status"] = statusStr
+			orderResult["executedQty"] = observedQty
+			orderResult["avgPrice"] = observedPrice
+			orderResult["commission"] = observedFee
+			at.persistOrderState(orderID, symbol, action, quantity, observedQty, observedPrice, observedFee, lastState, nil)
+			if lastState == OrderStateFilled {
 				// Get actual fill price
-				if avgPrice, ok := status["avgPrice"].(float64); ok && avgPrice > 0 {
-					actualPrice = avgPrice
-				}
+				actualPrice = numberValue(status["avgPrice"])
 				// Get actual executed quantity
-				if execQty, ok := status["executedQty"].(float64); ok && execQty > 0 {
-					actualQty = execQty
-				}
+				actualQty = numberValue(status["executedQty"])
 				// Get commission/fee
 				if commission, ok := status["commission"].(float64); ok {
 					fee = commission
 				}
+				if actualPrice <= 0 || actualQty <= 0 {
+					logger.Errorf("  Order %s reported FILLED without valid fill data (price=%.8f qty=%.8f)", orderID, actualPrice, actualQty)
+					return false
+				}
 				logger.Infof("  ✅ Order filled: avgPrice=%.6f, qty=%.6f, fee=%.6f", actualPrice, actualQty, fee)
 				orderFilled = true
 				break
-			} else if statusStr == "CANCELED" || statusStr == "EXPIRED" || statusStr == "REJECTED" {
-				logger.Infof("  ⚠️ Order %s, skipping position record", statusStr)
+			} else if lastState == OrderStateCanceled || lastState == OrderStateRejected {
+				executed := numberValue(status["executedQty"])
+				if executed > 0 {
+					logger.Errorf("  Order %s ended %s after partial execution %.8f; position reconciliation required", orderID, statusStr, executed)
+				} else {
+					logger.Infof("  ⚠️ Order %s, skipping position record", statusStr)
+				}
 				return false
+			} else if lastState == OrderStatePartial {
+				logger.Warnf("  Order %s is partially filled: executedQty=%.8f", orderID, numberValue(status["executedQty"]))
 			}
+		} else {
+			at.persistOrderState(orderID, symbol, action, quantity, 0, 0, 0, lastState, err)
 		}
 		time.Sleep(500 * time.Millisecond)
 	}
 
-	if isLimitOrder && !orderFilled {
-		logger.Infof("  ⏳ Limit order %s not filled yet, local position record will wait for a later sync", orderID)
+	if !orderFilled {
+		logger.Errorf("  Order %s was not confirmed filled (last state: %s); local position will not be mutated", orderID, lastState)
 		return false
 	}
 
 	logger.Infof("  📝 Recording position (ID: %s, action: %s, price: %.6f, qty: %.6f, fee: %.4f)",
 		orderID, action, actualPrice, actualQty, fee)
+	orderResult["status"] = string(OrderStateFilled)
+	orderResult["avgPrice"] = actualPrice
+	orderResult["executedQty"] = actualQty
+	orderResult["commission"] = fee
 
 	// Record position change with actual fill data
 	at.recordPositionChange(orderID, symbol, positionSide, action, actualQty, actualPrice, leverage, entryPrice, fee)
@@ -1971,12 +2291,28 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 			return
 		}
 
-		// Calculate P&L
+		closedQuantity := math.Min(quantity, openPos.Quantity)
+		if closedQuantity <= 0 {
+			logger.Errorf("  Invalid close fill quantity %.8f for %s %s", quantity, symbol, side)
+			return
+		}
+
+		// Calculate P&L for the confirmed fill only.
 		var realizedPnL float64
 		if side == "LONG" {
-			realizedPnL = (price - openPos.EntryPrice) * openPos.Quantity
+			realizedPnL = (price - openPos.EntryPrice) * closedQuantity
 		} else {
-			realizedPnL = (openPos.EntryPrice - price) * openPos.Quantity
+			realizedPnL = (openPos.EntryPrice - price) * closedQuantity
+		}
+
+		remainingQuantity := openPos.Quantity - closedQuantity
+		if remainingQuantity > 1e-9 {
+			if err := at.store.Position().ApplyPartialClose(openPos.ID, remainingQuantity, realizedPnL, fee); err != nil {
+				logger.Errorf("  Failed to record partial close: %v", err)
+			} else {
+				logger.Warnf("  Position partially closed [%s] %s %s: closed=%.8f remaining=%.8f", at.id, symbol, side, closedQuantity, remainingQuantity)
+			}
+			return
 		}
 
 		// Update position record

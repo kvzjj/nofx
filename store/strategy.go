@@ -169,6 +169,14 @@ type RiskControlConfig struct {
 	OrderType string `json:"order_type,omitempty"`
 	// Limit order offset from current price in percent. Long uses below market, short uses above market.
 	LimitPriceOffsetPct float64 `json:"limit_price_offset_pct,omitempty"`
+	// Number of retries for installing stop-loss/take-profit orders after a fill.
+	ProtectionRetries int `json:"protection_retries,omitempty"`
+	// Delay between protection retries in milliseconds.
+	ProtectionRetryDelayMs int `json:"protection_retry_delay_ms,omitempty"`
+	// Action after protection retries are exhausted: "close", "reduce", or "keep_unprotected".
+	ProtectionFailureAction string `json:"protection_failure_action,omitempty"`
+	// Percentage to close when ProtectionFailureAction is "reduce".
+	ProtectionFailureReducePct float64 `json:"protection_failure_reduce_pct,omitempty"`
 }
 
 func (s *StrategyStore) initTables() error {
@@ -248,16 +256,20 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			OIRankingLimit:    10,
 		},
 		RiskControl: RiskControlConfig{
-			MaxPositions:         3,    // Max 3 coins simultaneously (CODE ENFORCED)
-			BTCETHMaxLeverage:    5,    // BTC/ETH exchange leverage (AI guided)
-			AltcoinMaxLeverage:   5,    // Altcoin exchange leverage (AI guided)
-			MaxPositionSize:      1000, // Max 1,000 USDT per opening order
-			MaxTotalPositionSize: 3000, // Max 3,000 USDT total open notional
-			MinPositionSize:      12,   // Min 12 USDT per position (CODE ENFORCED)
-			MinRiskRewardRatio:   3.0,  // Min 3:1 profit/loss ratio (AI guided)
-			MinConfidence:        75,   // Min 75% confidence (AI guided)
-			OrderType:            "market",
-			LimitPriceOffsetPct:  0.05,
+			MaxPositions:               3,    // Max 3 coins simultaneously (CODE ENFORCED)
+			BTCETHMaxLeverage:          5,    // BTC/ETH exchange leverage (AI guided)
+			AltcoinMaxLeverage:         5,    // Altcoin exchange leverage (AI guided)
+			MaxPositionSize:            1000, // Max 1,000 USDT per opening order
+			MaxTotalPositionSize:       3000, // Max 3,000 USDT total open notional
+			MinPositionSize:            12,   // Min 12 USDT per position (CODE ENFORCED)
+			MinRiskRewardRatio:         3.0,  // Min 3:1 profit/loss ratio (AI guided)
+			MinConfidence:              75,   // Min 75% confidence (AI guided)
+			OrderType:                  "market",
+			LimitPriceOffsetPct:        0.05,
+			ProtectionRetries:          3,
+			ProtectionRetryDelayMs:     1000,
+			ProtectionFailureAction:    "close",
+			ProtectionFailureReducePct: 50,
 		},
 	}
 
@@ -528,6 +540,23 @@ func (config *StrategyConfig) ApplyDefaults() {
 	}
 	if config.RiskControl.LimitPriceOffsetPct <= 0 {
 		config.RiskControl.LimitPriceOffsetPct = 0.05
+	}
+	if config.RiskControl.ProtectionRetries <= 0 {
+		config.RiskControl.ProtectionRetries = 3
+	}
+	if config.RiskControl.ProtectionRetryDelayMs <= 0 {
+		config.RiskControl.ProtectionRetryDelayMs = 1000
+	}
+	if config.RiskControl.ProtectionFailureAction == "" {
+		config.RiskControl.ProtectionFailureAction = "close"
+	}
+	switch config.RiskControl.ProtectionFailureAction {
+	case "close", "reduce", "keep_unprotected":
+	default:
+		config.RiskControl.ProtectionFailureAction = "close"
+	}
+	if config.RiskControl.ProtectionFailureReducePct <= 0 || config.RiskControl.ProtectionFailureReducePct > 100 {
+		config.RiskControl.ProtectionFailureReducePct = 50
 	}
 	if config.RiskControl.MaxPositionSize <= 0 {
 		config.RiskControl.MaxPositionSize = 1000

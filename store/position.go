@@ -31,20 +31,21 @@ type TraderPosition struct {
 	ExchangeType       string     `json:"exchange_type"`        // Exchange type: binance/bybit/okx/hyperliquid/aster/lighter
 	ExchangePositionID string     `json:"exchange_position_id"` // Exchange-specific unique position ID for deduplication
 	Symbol             string     `json:"symbol"`
-	Side               string     `json:"side"`           // LONG/SHORT
-	Quantity           float64    `json:"quantity"`       // Opening quantity
-	EntryPrice         float64    `json:"entry_price"`    // Entry price
-	EntryOrderID       string     `json:"entry_order_id"` // Entry order ID
-	EntryTime          time.Time  `json:"entry_time"`     // Entry time
-	ExitPrice          float64    `json:"exit_price"`     // Exit price
-	ExitOrderID        string     `json:"exit_order_id"`  // Exit order ID
-	ExitTime           *time.Time `json:"exit_time"`      // Exit time
-	RealizedPnL        float64    `json:"realized_pnl"`   // Realized profit and loss
-	Fee                float64    `json:"fee"`            // Fee
-	Leverage           int        `json:"leverage"`       // Leverage multiplier
-	Status             string     `json:"status"`         // OPEN/CLOSED
-	CloseReason        string     `json:"close_reason"`   // Close reason: ai_decision/manual/stop_loss/take_profit
-	Source             string     `json:"source"`         // Source: system/manual/sync
+	Side               string     `json:"side"`              // LONG/SHORT
+	Quantity           float64    `json:"quantity"`          // Opening quantity
+	EntryPrice         float64    `json:"entry_price"`       // Entry price
+	EntryOrderID       string     `json:"entry_order_id"`    // Entry order ID
+	EntryTime          time.Time  `json:"entry_time"`        // Entry time
+	ExitPrice          float64    `json:"exit_price"`        // Exit price
+	ExitOrderID        string     `json:"exit_order_id"`     // Exit order ID
+	ExitTime           *time.Time `json:"exit_time"`         // Exit time
+	RealizedPnL        float64    `json:"realized_pnl"`      // Realized profit and loss
+	Fee                float64    `json:"fee"`               // Fee
+	Leverage           int        `json:"leverage"`          // Leverage multiplier
+	Status             string     `json:"status"`            // OPEN/CLOSED
+	ProtectionStatus   string     `json:"protection_status"` // UNPROTECTED/PROTECTING/PROTECTED/FAILED
+	CloseReason        string     `json:"close_reason"`      // Close reason: ai_decision/manual/stop_loss/take_profit
+	Source             string     `json:"source"`            // Source: system/manual/sync
 	CreatedAt          time.Time  `json:"created_at"`
 	UpdatedAt          time.Time  `json:"updated_at"`
 }
@@ -80,6 +81,7 @@ func (s *PositionStore) InitTables() error {
 			fee REAL DEFAULT 0,
 			leverage INTEGER DEFAULT 1,
 			status TEXT DEFAULT 'OPEN',
+			protection_status TEXT DEFAULT 'UNPROTECTED',
 			close_reason TEXT DEFAULT '',
 			source TEXT DEFAULT 'system',
 			created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
@@ -99,6 +101,7 @@ func (s *PositionStore) InitTables() error {
 	s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN exchange_position_id TEXT NOT NULL DEFAULT ''`)
 	// Migration: add source field (system/manual/sync)
 	s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN source TEXT DEFAULT 'system'`)
+	s.db.Exec(`ALTER TABLE trader_positions ADD COLUMN protection_status TEXT DEFAULT 'UNPROTECTED'`)
 
 	// Create indexes (after migration)
 	indices := []string{
@@ -130,16 +133,19 @@ func (s *PositionStore) Create(pos *TraderPosition) error {
 	pos.CreatedAt = now
 	pos.UpdatedAt = now
 	pos.Status = "OPEN"
+	if pos.ProtectionStatus == "" {
+		pos.ProtectionStatus = "UNPROTECTED"
+	}
 
 	result, err := s.db.Exec(`
 		INSERT INTO trader_positions (
 			trader_id, exchange_id, exchange_type, symbol, side, quantity, entry_price, entry_order_id,
-			entry_time, leverage, status, created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			entry_time, leverage, status, protection_status, created_at, updated_at
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 	`,
 		pos.TraderID, pos.ExchangeID, pos.ExchangeType, pos.Symbol, pos.Side, pos.Quantity, pos.EntryPrice,
 		pos.EntryOrderID, pos.EntryTime.Format(time.RFC3339), pos.Leverage,
-		pos.Status, now.Format(time.RFC3339), now.Format(time.RFC3339),
+		pos.Status, pos.ProtectionStatus, now.Format(time.RFC3339), now.Format(time.RFC3339),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to create position record: %w", err)
@@ -169,12 +175,41 @@ func (s *PositionStore) ClosePosition(id int64, exitPrice float64, exitOrderID s
 	return nil
 }
 
+// ApplyPartialClose reduces an open position without marking the remaining
+// quantity as closed.
+func (s *PositionStore) ApplyPartialClose(id int64, remainingQty, realizedPnL, fee float64) error {
+	now := time.Now().Format(time.RFC3339)
+	_, err := s.db.Exec(`
+		UPDATE trader_positions SET
+			quantity = ?, realized_pnl = realized_pnl + ?, fee = fee + ?, updated_at = ?
+		WHERE id = ? AND status = 'OPEN'
+	`, remainingQty, realizedPnL, fee, now, id)
+	if err != nil {
+		return fmt.Errorf("failed to apply partial close: %w", err)
+	}
+	return nil
+}
+
+// UpdateProtectionStatus records whether an open position currently has both
+// stop-loss and take-profit protection installed.
+func (s *PositionStore) UpdateProtectionStatus(traderID, entryOrderID, status string) error {
+	_, err := s.db.Exec(`
+		UPDATE trader_positions
+		SET protection_status = ?, updated_at = ?
+		WHERE trader_id = ? AND entry_order_id = ? AND status = 'OPEN'
+	`, status, time.Now().Format(time.RFC3339), traderID, entryOrderID)
+	if err != nil {
+		return fmt.Errorf("failed to update protection status: %w", err)
+	}
+	return nil
+}
+
 // GetOpenPositions gets all open positions
 func (s *PositionStore) GetOpenPositions(traderID string) ([]*TraderPosition, error) {
 	rows, err := s.db.Query(`
 		SELECT id, trader_id, exchange_id, COALESCE(exchange_type, '') as exchange_type, symbol, side, quantity, entry_price, entry_order_id,
 			entry_time, exit_price, exit_order_id, exit_time, realized_pnl, fee,
-			leverage, status, close_reason, created_at, updated_at
+			leverage, status, protection_status, close_reason, created_at, updated_at
 		FROM trader_positions
 		WHERE trader_id = ? AND status = 'OPEN'
 		ORDER BY entry_time DESC
@@ -195,7 +230,7 @@ func (s *PositionStore) GetOpenPositionBySymbol(traderID, symbol, side string) (
 	err := s.db.QueryRow(`
 		SELECT id, trader_id, exchange_id, COALESCE(exchange_type, '') as exchange_type, symbol, side, quantity, entry_price, entry_order_id,
 			entry_time, exit_price, exit_order_id, exit_time, realized_pnl, fee,
-			leverage, status, close_reason, created_at, updated_at
+			leverage, status, protection_status, close_reason, created_at, updated_at
 		FROM trader_positions
 		WHERE trader_id = ? AND symbol = ? AND side = ? AND status = 'OPEN'
 		ORDER BY entry_time DESC LIMIT 1
@@ -203,7 +238,7 @@ func (s *PositionStore) GetOpenPositionBySymbol(traderID, symbol, side string) (
 		&pos.ID, &pos.TraderID, &pos.ExchangeID, &pos.ExchangeType, &pos.Symbol, &pos.Side, &pos.Quantity,
 		&pos.EntryPrice, &pos.EntryOrderID, &entryTime, &pos.ExitPrice,
 		&pos.ExitOrderID, &exitTime, &pos.RealizedPnL, &pos.Fee,
-		&pos.Leverage, &pos.Status, &pos.CloseReason, &createdAt, &updatedAt,
+		&pos.Leverage, &pos.Status, &pos.ProtectionStatus, &pos.CloseReason, &createdAt, &updatedAt,
 	)
 	if err != nil {
 		if err == sql.ErrNoRows {
@@ -221,7 +256,7 @@ func (s *PositionStore) GetClosedPositions(traderID string, limit int) ([]*Trade
 	rows, err := s.db.Query(`
 		SELECT id, trader_id, exchange_id, COALESCE(exchange_type, '') as exchange_type, symbol, side, quantity, entry_price, entry_order_id,
 			entry_time, exit_price, exit_order_id, exit_time, realized_pnl, fee,
-			leverage, status, close_reason, created_at, updated_at
+			leverage, status, protection_status, close_reason, created_at, updated_at
 		FROM trader_positions
 		WHERE trader_id = ? AND status = 'CLOSED'
 		ORDER BY exit_time DESC
@@ -240,7 +275,7 @@ func (s *PositionStore) GetAllOpenPositions() ([]*TraderPosition, error) {
 	rows, err := s.db.Query(`
 		SELECT id, trader_id, exchange_id, COALESCE(exchange_type, '') as exchange_type, symbol, side, quantity, entry_price, entry_order_id,
 			entry_time, exit_price, exit_order_id, exit_time, realized_pnl, fee,
-			leverage, status, close_reason, created_at, updated_at
+			leverage, status, protection_status, close_reason, created_at, updated_at
 		FROM trader_positions
 		WHERE status = 'OPEN'
 		ORDER BY trader_id, entry_time DESC
@@ -523,7 +558,7 @@ func (s *PositionStore) scanPositions(rows *sql.Rows) ([]*TraderPosition, error)
 			&pos.ID, &pos.TraderID, &pos.ExchangeID, &pos.ExchangeType, &pos.Symbol, &pos.Side, &pos.Quantity,
 			&pos.EntryPrice, &pos.EntryOrderID, &entryTime, &pos.ExitPrice,
 			&pos.ExitOrderID, &exitTime, &pos.RealizedPnL, &pos.Fee,
-			&pos.Leverage, &pos.Status, &pos.CloseReason, &createdAt, &updatedAt,
+			&pos.Leverage, &pos.Status, &pos.ProtectionStatus, &pos.CloseReason, &createdAt, &updatedAt,
 		)
 		if err != nil {
 			continue
@@ -602,10 +637,10 @@ func (s *PositionStore) GetSymbolStats(traderID string, limit int) ([]SymbolStat
 
 // HoldingTimeStats holding duration analysis
 type HoldingTimeStats struct {
-	Range       string  `json:"range"`        // e.g., "<1h", "1-4h", "4-24h", ">24h"
-	TradeCount  int     `json:"trade_count"`
-	WinRate     float64 `json:"win_rate"`
-	AvgPnL      float64 `json:"avg_pnl"`
+	Range      string  `json:"range"` // e.g., "<1h", "1-4h", "4-24h", ">24h"
+	TradeCount int     `json:"trade_count"`
+	WinRate    float64 `json:"win_rate"`
+	AvgPnL     float64 `json:"avg_pnl"`
 }
 
 // GetHoldingTimeStats analyzes performance by holding duration
@@ -721,9 +756,9 @@ type HistorySummary struct {
 	RecentPnL     float64 `json:"recent_pnl"`
 
 	// Streak info
-	CurrentStreak     int    `json:"current_streak"`      // Positive = wins, negative = losses
-	MaxWinStreak      int    `json:"max_win_streak"`
-	MaxLoseStreak     int    `json:"max_lose_streak"`
+	CurrentStreak int `json:"current_streak"` // Positive = wins, negative = losses
+	MaxWinStreak  int `json:"max_win_streak"`
+	MaxLoseStreak int `json:"max_lose_streak"`
 }
 
 // GetHistorySummary generates comprehensive AI context summary

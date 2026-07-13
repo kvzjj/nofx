@@ -5,9 +5,19 @@ import "time"
 // OrderType controls how opening orders are submitted.
 type OrderType string
 
+// OrderState is the normalized lifecycle state used across exchanges.
+type OrderState string
+
 const (
 	OrderTypeMarket OrderType = "market"
 	OrderTypeLimit  OrderType = "limit"
+
+	OrderStateIntent    OrderState = "INTENT"
+	OrderStateSubmitted OrderState = "SUBMITTED"
+	OrderStatePartial   OrderState = "PARTIAL"
+	OrderStateFilled    OrderState = "FILLED"
+	OrderStateCanceled  OrderState = "CANCELED"
+	OrderStateRejected  OrderState = "REJECTED"
 )
 
 // OrderOptions contains optional execution controls for opening orders.
@@ -21,6 +31,18 @@ type OrderOptions struct {
 type AdvancedOrderTrader interface {
 	OpenLongWithOptions(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error)
 	OpenShortWithOptions(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error)
+}
+
+// PositionOrderCanceler is implemented by exchanges that can remove orders
+// owned by one side of a hedge-mode position without touching the other side.
+type PositionOrderCanceler interface {
+	CancelPositionOrders(symbol, positionSide string) error
+}
+
+// SingleOrderCanceler cancels one known order without affecting unrelated
+// orders for the same symbol.
+type SingleOrderCanceler interface {
+	CancelOrder(symbol, orderID string) error
 }
 
 // ClosedPnLRecord represents a single closed position record from exchange

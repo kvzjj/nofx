@@ -348,11 +348,6 @@ func (t *FuturesTrader) OpenShortWithOptions(symbol string, quantity float64, le
 }
 
 func (t *FuturesTrader) openPosition(symbol string, quantity float64, leverage int, side futures.SideType, positionSide futures.PositionSideType, sideLabel string, options OrderOptions) (map[string]interface{}, error) {
-	// First cancel all pending orders for this symbol (clean up old stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel old pending orders (may not have any): %v", err)
-	}
-
 	// Set leverage
 	if err := t.SetLeverage(symbol, leverage); err != nil {
 		return nil, err
@@ -419,7 +414,7 @@ func (t *FuturesTrader) openPosition(symbol string, quantity float64, leverage i
 	if orderType == OrderTypeLimit {
 		logger.Infof("✓ Submitted limit %s order successfully: %s quantity: %s price: %s", sideLabel, symbol, quantityStr, submittedPrice)
 	} else {
-		logger.Infof("✓ Opened %s position successfully: %s quantity: %s", sideLabel, symbol, quantityStr)
+		logger.Infof("✓ Submitted market %s order: %s quantity: %s", sideLabel, symbol, quantityStr)
 	}
 	logger.Infof("  Order ID: %d", order.OrderID)
 
@@ -475,12 +470,7 @@ func (t *FuturesTrader) CloseLong(symbol string, quantity float64) (map[string]i
 		return nil, fmt.Errorf("failed to close long position: %w", err)
 	}
 
-	logger.Infof("✓ Closed long position successfully: %s quantity: %s", symbol, quantityStr)
-
-	// After closing position, cancel all pending orders for this symbol (stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
-	}
+	logger.Infof("✓ Submitted close-long order: %s quantity: %s", symbol, quantityStr)
 
 	result := make(map[string]interface{})
 	result["orderId"] = order.OrderID
@@ -530,12 +520,7 @@ func (t *FuturesTrader) CloseShort(symbol string, quantity float64) (map[string]
 		return nil, fmt.Errorf("failed to close short position: %w", err)
 	}
 
-	logger.Infof("✓ Closed short position successfully: %s quantity: %s", symbol, quantityStr)
-
-	// After closing position, cancel all pending orders for this symbol (stop-loss and take-profit orders)
-	if err := t.CancelAllOrders(symbol); err != nil {
-		logger.Infof("  ⚠ Failed to cancel pending orders: %v", err)
-	}
+	logger.Infof("✓ Submitted close-short order: %s quantity: %s", symbol, quantityStr)
 
 	result := make(map[string]interface{})
 	result["orderId"] = order.OrderID
@@ -655,6 +640,50 @@ func (t *FuturesTrader) CancelAllOrders(symbol string) error {
 	}
 
 	logger.Infof("  ✓ Canceled all pending orders for %s", symbol)
+	return nil
+}
+
+// CancelOrder cancels one order by exchange order ID.
+func (t *FuturesTrader) CancelOrder(symbol, orderID string) error {
+	id, err := strconv.ParseInt(orderID, 10, 64)
+	if err != nil {
+		return fmt.Errorf("invalid order ID %q: %w", orderID, err)
+	}
+	if _, err := t.client.NewCancelOrderService().Symbol(symbol).OrderID(id).Do(context.Background()); err != nil {
+		return fmt.Errorf("failed to cancel order %s: %w", orderID, err)
+	}
+	return nil
+}
+
+// CancelPositionOrders cancels protective orders for exactly one hedge-mode
+// position side. It intentionally leaves the opposite side and normal entry
+// orders untouched.
+func (t *FuturesTrader) CancelPositionOrders(symbol, positionSide string) error {
+	orders, err := t.client.NewListOpenOrdersService().Symbol(symbol).Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get open orders: %w", err)
+	}
+
+	targetSide := futures.PositionSideType(strings.ToUpper(positionSide))
+	var cancelErrors []error
+	for _, order := range orders {
+		if order.PositionSide != targetSide {
+			continue
+		}
+		if !strings.HasPrefix(order.ClientOrderID, "x-KzrpZaP9") {
+			continue
+		}
+		if order.Type != futures.OrderTypeStopMarket && order.Type != futures.OrderTypeTakeProfitMarket &&
+			order.Type != futures.OrderTypeStop && order.Type != futures.OrderTypeTakeProfit {
+			continue
+		}
+		if _, err := t.client.NewCancelOrderService().Symbol(symbol).OrderID(order.OrderID).Do(context.Background()); err != nil {
+			cancelErrors = append(cancelErrors, fmt.Errorf("order %d: %w", order.OrderID, err))
+		}
+	}
+	if len(cancelErrors) > 0 {
+		return fmt.Errorf("failed to cancel %s protective orders: %v", positionSide, cancelErrors)
+	}
 	return nil
 }
 

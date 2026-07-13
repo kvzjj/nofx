@@ -16,15 +16,16 @@ type Store struct {
 	db *sql.DB
 
 	// Sub-stores (lazy initialization)
-	user     *UserStore
-	aiModel  *AIModelStore
-	exchange *ExchangeStore
-	trader   *TraderStore
-	decision *DecisionStore
-	backtest *BacktestStore
-	position *PositionStore
-	strategy *StrategyStore
-	equity   *EquityStore
+	user      *UserStore
+	aiModel   *AIModelStore
+	exchange  *ExchangeStore
+	trader    *TraderStore
+	decision  *DecisionStore
+	backtest  *BacktestStore
+	position  *PositionStore
+	execution *ExecutionStore
+	strategy  *StrategyStore
+	equity    *EquityStore
 
 	// Encryption functions
 	encryptFunc func(string) string
@@ -137,6 +138,9 @@ func (s *Store) initTables() error {
 	if err := s.Position().InitTables(); err != nil {
 		return fmt.Errorf("failed to initialize position tables: %w", err)
 	}
+	if err := s.Execution().InitTables(); err != nil {
+		return fmt.Errorf("failed to initialize execution tables: %w", err)
+	}
 	if err := s.Strategy().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize strategy tables: %w", err)
 	}
@@ -245,6 +249,16 @@ func (s *Store) Position() *PositionStore {
 		s.position = NewPositionStore(s.db)
 	}
 	return s.position
+}
+
+// Execution gets order, fill, and protection storage.
+func (s *Store) Execution() *ExecutionStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.execution == nil {
+		s.execution = NewExecutionStore(s.db)
+	}
+	return s.execution
 }
 
 // Strategy gets strategy storage

@@ -636,28 +636,32 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 
 	// Build AutoTraderConfig (coinPoolURL/oiTopURL obtained from strategy config, used in StrategyEngine)
 	traderConfig := trader.AutoTraderConfig{
-		ID:                    traderCfg.ID,
-		Name:                  traderCfg.Name,
-		AIModel:               aiModelCfg.Provider,
-		Exchange:              exchangeCfg.ExchangeType, // Exchange type: binance/okx
-		ExchangeID:            exchangeCfg.ID,           // Exchange account UUID (for multi-account)
-		BinanceAPIKey:         "",
-		BinanceSecretKey:      "",
-		BinanceTestnet:        exchangeCfg.Testnet,
-		HyperliquidPrivateKey: "",
-		HyperliquidTestnet:    exchangeCfg.Testnet,
-		UseQwen:               aiModelCfg.Provider == "qwen",
-		DeepSeekKey:           "",
-		QwenKey:               "",
-		CustomAPIURL:          aiModelCfg.CustomAPIURL,
-		CustomModelName:       aiModelCfg.CustomModelName,
-		ScanInterval:          time.Duration(traderCfg.ScanIntervalMinutes) * time.Minute,
-		InitialBalance:        traderCfg.InitialBalance,
-		IsCrossMargin:         traderCfg.IsCrossMargin,
-		ShowInCompetition:     traderCfg.ShowInCompetition,
-		OrderType:             trader.OrderType(strategyConfig.RiskControl.OrderType),
-		LimitPriceOffsetPct:   strategyConfig.RiskControl.LimitPriceOffsetPct,
-		StrategyConfig:        strategyConfig,
+		ID:                         traderCfg.ID,
+		Name:                       traderCfg.Name,
+		AIModel:                    aiModelCfg.Provider,
+		Exchange:                   exchangeCfg.ExchangeType, // Exchange type: binance/okx
+		ExchangeID:                 exchangeCfg.ID,           // Exchange account UUID (for multi-account)
+		BinanceAPIKey:              "",
+		BinanceSecretKey:           "",
+		BinanceTestnet:             exchangeCfg.Testnet,
+		HyperliquidPrivateKey:      "",
+		HyperliquidTestnet:         exchangeCfg.Testnet,
+		UseQwen:                    aiModelCfg.Provider == "qwen",
+		DeepSeekKey:                "",
+		QwenKey:                    "",
+		CustomAPIURL:               aiModelCfg.CustomAPIURL,
+		CustomModelName:            aiModelCfg.CustomModelName,
+		ScanInterval:               time.Duration(traderCfg.ScanIntervalMinutes) * time.Minute,
+		InitialBalance:             traderCfg.InitialBalance,
+		IsCrossMargin:              traderCfg.IsCrossMargin,
+		ShowInCompetition:          traderCfg.ShowInCompetition,
+		OrderType:                  trader.OrderType(strategyConfig.RiskControl.OrderType),
+		LimitPriceOffsetPct:        strategyConfig.RiskControl.LimitPriceOffsetPct,
+		ProtectionRetries:          strategyConfig.RiskControl.ProtectionRetries,
+		ProtectionRetryDelay:       time.Duration(strategyConfig.RiskControl.ProtectionRetryDelayMs) * time.Millisecond,
+		ProtectionFailureAction:    strategyConfig.RiskControl.ProtectionFailureAction,
+		ProtectionFailureReducePct: strategyConfig.RiskControl.ProtectionFailureReducePct,
+		StrategyConfig:             strategyConfig,
 	}
 
 	// Set API keys based on exchange type
