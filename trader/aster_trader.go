@@ -8,12 +8,12 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"nofx/logger"
 	"math"
 	"math/big"
 	"net/http"
 	"net/url"
 	"nofx/hook"
+	"nofx/logger"
 	"sort"
 	"strconv"
 	"strings"
@@ -939,6 +939,23 @@ func (t *AsterTrader) SetLeverage(symbol string, leverage int) error {
 	}
 
 	_, err := t.request("POST", "/fapi/v3/leverage", params)
+	if err == nil {
+		return nil
+	}
+	if !isInvalidLeverageError(err) {
+		return err
+	}
+
+	logger.Infof("  ⚠️ %s leverage %dx is not valid, trying lower leverage", symbol, leverage)
+	for _, fallback := range leverageFallbackCandidates(leverage) {
+		params["leverage"] = fallback
+		if _, retryErr := t.request("POST", "/fapi/v3/leverage", params); retryErr == nil {
+			logger.Infof("  ✓ %s leverage changed to fallback %dx", symbol, fallback)
+			return nil
+		} else if !isInvalidLeverageError(retryErr) {
+			return retryErr
+		}
+	}
 	return err
 }
 
@@ -1262,14 +1279,14 @@ func (t *AsterTrader) GetOrderStatus(symbol string, orderID string) (map[string]
 
 	// Standardize return fields
 	response := map[string]interface{}{
-		"orderId":     result["orderId"],
-		"symbol":      result["symbol"],
-		"status":      result["status"],
-		"side":        result["side"],
-		"type":        result["type"],
-		"time":        result["time"],
-		"updateTime":  result["updateTime"],
-		"commission":  0.0, // Aster may require separate query
+		"orderId":    result["orderId"],
+		"symbol":     result["symbol"],
+		"status":     result["status"],
+		"side":       result["side"],
+		"type":       result["type"],
+		"time":       result["time"],
+		"updateTime": result["updateTime"],
+		"commission": 0.0, // Aster may require separate query
 	}
 
 	// Parse numeric fields

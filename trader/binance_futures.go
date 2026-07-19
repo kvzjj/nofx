@@ -327,6 +327,27 @@ func (t *FuturesTrader) SetLeverage(symbol string, leverage int) error {
 			logger.Infof("  ✓ %s leverage is already %dx", symbol, leverage)
 			return nil
 		}
+		if isInvalidLeverageError(err) {
+			logger.Infof("  ⚠️ %s leverage %dx is not valid, trying lower leverage", symbol, leverage)
+			for _, fallback := range leverageFallbackCandidates(leverage) {
+				_, retryErr := t.client.NewChangeLeverageService().
+					Symbol(symbol).
+					Leverage(fallback).
+					Do(context.Background())
+				if retryErr == nil {
+					logger.Infof("  ✓ %s leverage changed to fallback %dx", symbol, fallback)
+					time.Sleep(5 * time.Second)
+					return nil
+				}
+				if contains(retryErr.Error(), "No need to change") {
+					logger.Infof("  ✓ %s leverage is already %dx", symbol, fallback)
+					return nil
+				}
+				if !isInvalidLeverageError(retryErr) {
+					return fmt.Errorf("failed to set leverage: %w", retryErr)
+				}
+			}
+		}
 		return fmt.Errorf("failed to set leverage: %w", err)
 	}
 

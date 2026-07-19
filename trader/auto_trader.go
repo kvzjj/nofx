@@ -609,9 +609,19 @@ func (at *AutoTrader) runCycle() error {
 			at.recordExecutionFailure(err)
 			logger.Infof("❌ Failed to execute decision (%s %s): %v", d.Symbol, d.Action, err)
 			actionRecord.Error = err.Error()
+			record.Success = false
+			if record.ErrorMessage == "" {
+				record.ErrorMessage = fmt.Sprintf("%s %s failed: %v", d.Symbol, d.Action, err)
+			} else {
+				record.ErrorMessage += fmt.Sprintf("; %s %s failed: %v", d.Symbol, d.Action, err)
+			}
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s failed: %v", d.Symbol, d.Action, err))
 		} else {
-			at.recordExecutionSuccess()
+			// Passive decisions did not test the exchange and must not erase a
+			// previous execution failure in this or an earlier cycle.
+			if d.Action != "hold" && d.Action != "wait" {
+				at.recordExecutionSuccess()
+			}
 			actionRecord.Success = true
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s succeeded", d.Symbol, d.Action))
 			// Brief delay after successful execution
@@ -637,23 +647,28 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		return nil, fmt.Errorf("failed to get account balance: %w", err)
 	}
 
-	// Get account fields
-	totalWalletBalance := 0.0
-	totalUnrealizedProfit := 0.0
-	availableBalance := 0.0
-
-	if wallet, ok := balance["totalWalletBalance"].(float64); ok {
-		totalWalletBalance = wallet
+	// Normalize account fields across exchanges. Some adapters expose camelCase
+	// Binance-compatible keys while others (notably Lighter) use snake_case.
+	totalUnrealizedProfit, _ := accountNumber(balance,
+		"totalUnrealizedProfit", "unrealized_profit", "unrealized_pnl")
+	totalWalletBalance, hasWalletBalance := accountNumber(balance,
+		"totalWalletBalance", "wallet_balance", "walletBalance")
+	totalEquity, hasTotalEquity := accountNumber(balance,
+		"total_equity", "totalEquity", "totalEq", "accountEquity")
+	if !hasTotalEquity {
+		if !hasWalletBalance {
+			return nil, fmt.Errorf("balance response does not contain total equity or wallet balance")
+		}
+		totalEquity = totalWalletBalance + totalUnrealizedProfit
 	}
-	if unrealized, ok := balance["totalUnrealizedProfit"].(float64); ok {
-		totalUnrealizedProfit = unrealized
+	if !hasWalletBalance {
+		totalWalletBalance = totalEquity - totalUnrealizedProfit
 	}
-	if avail, ok := balance["availableBalance"].(float64); ok {
-		availableBalance = avail
+	availableBalance, ok := accountNumber(balance,
+		"availableBalance", "available_balance", "available", "availBal")
+	if !ok {
+		return nil, fmt.Errorf("balance response does not contain available balance")
 	}
-
-	// Total Equity = Wallet balance + Unrealized profit
-	totalEquity := totalWalletBalance + totalUnrealizedProfit
 
 	// 2. Get position information
 	positions, err := at.trader.GetPositions()
@@ -668,11 +683,13 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	currentPositionKeys := make(map[string]bool)
 
 	for _, pos := range positions {
-		symbol := pos["symbol"].(string)
-		side := pos["side"].(string)
-		entryPrice := pos["entryPrice"].(float64)
-		markPrice := pos["markPrice"].(float64)
-		quantity := pos["positionAmt"].(float64)
+		symbol, _ := pos["symbol"].(string)
+		symbol = strings.ToUpper(strings.TrimSpace(symbol))
+		side, _ := pos["side"].(string)
+		side = strings.ToLower(strings.TrimSpace(side))
+		entryPrice, _ := accountNumber(pos, "entryPrice", "entry_price")
+		markPrice, _ := accountNumber(pos, "markPrice", "mark_price")
+		quantity, _ := accountNumber(pos, "positionAmt", "size", "quantity")
 		if quantity < 0 {
 			quantity = -quantity // Short position quantity is negative, convert to positive
 		}
@@ -682,12 +699,17 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 			continue
 		}
 
-		unrealizedPnl := pos["unRealizedProfit"].(float64)
-		liquidationPrice := pos["liquidationPrice"].(float64)
+		if symbol == "" || (side != "long" && side != "short") || entryPrice <= 0 || markPrice <= 0 {
+			logger.Warnf("[%s] skipping malformed exchange position: symbol=%q side=%q entry=%.8f mark=%.8f", at.name, symbol, side, entryPrice, markPrice)
+			continue
+		}
+
+		unrealizedPnl, _ := accountNumber(pos, "unRealizedProfit", "unrealized_pnl", "unrealizedPnl")
+		liquidationPrice, _ := accountNumber(pos, "liquidationPrice", "liquidation_price")
 
 		// Calculate margin used (estimated)
-		leverage := 10 // Default value, should actually be fetched from position info
-		if lev, ok := pos["leverage"].(float64); ok {
+		leverage := 10
+		if lev, ok := accountNumber(pos, "leverage"); ok && lev > 0 {
 			leverage = int(lev)
 		}
 		marginUsed := (quantity * markPrice) / float64(leverage)
@@ -1035,14 +1057,11 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	if err != nil {
 		return fmt.Errorf("failed to get account balance: %w", err)
 	}
-	availableBalance := 0.0
-	if avail, ok := balance["availableBalance"].(float64); ok {
-		availableBalance = avail
+	availableBalance, ok := accountNumber(balance,
+		"availableBalance", "available_balance", "available", "availBal")
+	if !ok {
+		return fmt.Errorf("failed to determine available balance from exchange response")
 	}
-	if err := at.enforceAccountEntryRisk(positions, balance, decision.PositionSizeUSD, decision.Leverage, marketData); err != nil {
-		return err
-	}
-
 	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
 
 	// ⚠️ Auto-adjust position size if insufficient margin
@@ -1063,6 +1082,13 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 
 	// [CODE ENFORCED] Minimum position size check
 	if err := at.enforceMinPositionSize(decision.PositionSizeUSD); err != nil {
+		return err
+	}
+	// Account-level projected margin must use the final amount that will
+	// actually be submitted, after strategy caps and affordability reduction.
+	// Checking the raw AI request here would reject orders that are safe after
+	// the execution layer's own sizing adjustments.
+	if err := at.enforceAccountEntryRisk(positions, balance, actualPositionSize, decision.Leverage, marketData); err != nil {
 		return err
 	}
 
@@ -1111,7 +1137,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		if isLimitOrderResult(order) {
 			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
 			at.monitorPendingEntryOrder(order, decision.Symbol, "open_long", "LONG", quantity, expectedEntryPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
-			return fmt.Errorf("open long order %s is SUBMITTED and awaiting fill/protection", getOrderIDString(order))
+			// A resting limit order is an accepted execution, not a failure. The
+			// background monitor owns fill recording and protection placement.
+			return nil
 		}
 		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
 			orderID := getOrderIDString(order)
@@ -1175,14 +1203,11 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	if err != nil {
 		return fmt.Errorf("failed to get account balance: %w", err)
 	}
-	availableBalance := 0.0
-	if avail, ok := balance["availableBalance"].(float64); ok {
-		availableBalance = avail
+	availableBalance, ok := accountNumber(balance,
+		"availableBalance", "available_balance", "available", "availBal")
+	if !ok {
+		return fmt.Errorf("failed to determine available balance from exchange response")
 	}
-	if err := at.enforceAccountEntryRisk(positions, balance, decision.PositionSizeUSD, decision.Leverage, marketData); err != nil {
-		return err
-	}
-
 	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
 
 	// ⚠️ Auto-adjust position size if insufficient margin
@@ -1203,6 +1228,13 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 
 	// [CODE ENFORCED] Minimum position size check
 	if err := at.enforceMinPositionSize(decision.PositionSizeUSD); err != nil {
+		return err
+	}
+	// Account-level projected margin must use the final amount that will
+	// actually be submitted, after strategy caps and affordability reduction.
+	// Checking the raw AI request here would reject orders that are safe after
+	// the execution layer's own sizing adjustments.
+	if err := at.enforceAccountEntryRisk(positions, balance, actualPositionSize, decision.Leverage, marketData); err != nil {
 		return err
 	}
 
@@ -1251,7 +1283,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		if isLimitOrderResult(order) {
 			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
 			at.monitorPendingEntryOrder(order, decision.Symbol, "open_short", "SHORT", quantity, expectedEntryPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
-			return fmt.Errorf("open short order %s is SUBMITTED and awaiting fill/protection", getOrderIDString(order))
+			// A resting limit order is an accepted execution, not a failure. The
+			// background monitor owns fill recording and protection placement.
+			return nil
 		}
 		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
 			orderID := getOrderIDString(order)
@@ -2545,7 +2579,10 @@ func (at *AutoTrader) enforceAccountEntryRisk(positions []map[string]interface{}
 	return nil
 }
 
-func (at *AutoTrader) recordExecutionFailure(_ error) {
+func (at *AutoTrader) recordExecutionFailure(err error) {
+	if err == nil || isPolicyRejection(err) {
+		return
+	}
 	at.riskMutex.Lock()
 	defer at.riskMutex.Unlock()
 	at.consecutiveFailures++
@@ -2553,6 +2590,30 @@ func (at *AutoTrader) recordExecutionFailure(_ error) {
 	if limits.maxFailures > 0 && at.consecutiveFailures >= limits.maxFailures {
 		at.triggerRiskLocked(fmt.Sprintf("%d consecutive execution failures", at.consecutiveFailures))
 	}
+}
+
+// isPolicyRejection distinguishes an intentional strategy/precondition block
+// from an exchange execution failure. Policy rejections remain visible in the
+// decision record, but should not poison the exchange-health circuit breaker.
+func isPolicyRejection(err error) bool {
+	message := strings.ToLower(err.Error())
+	markers := []string{
+		"[risk control]",
+		"already has long position",
+		"already has short position",
+		"already has a pending",
+		"already at max positions",
+		"no long position found",
+		"no short position found",
+		"below minimum",
+		"confidence ",
+	}
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
 func (at *AutoTrader) recordExecutionSuccess() {
@@ -2589,11 +2650,9 @@ func (at *AutoTrader) enforcePositionSizeLimits(positionSizeUSD float64, positio
 func totalPositionNotional(positions []map[string]interface{}) float64 {
 	total := 0.0
 	for _, position := range positions {
-		quantity := math.Abs(numberValue(position["positionAmt"]))
-		price := numberValue(position["markPrice"])
-		if price <= 0 {
-			price = numberValue(position["entryPrice"])
-		}
+		quantity, _ := accountNumber(position, "positionAmt", "size", "quantity")
+		quantity = math.Abs(quantity)
+		price, _ := accountNumber(position, "markPrice", "mark_price", "entryPrice", "entry_price")
 		if quantity > 0 && price > 0 {
 			total += quantity * price
 		}

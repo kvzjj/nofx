@@ -3,6 +3,7 @@ package trader
 import (
 	"fmt"
 	"strconv"
+	"strings"
 )
 
 // SafeFloat64 Safely extract float64 value from map
@@ -73,4 +74,28 @@ func SafeInt(data map[string]interface{}, key string) (int, error) {
 	default:
 		return 0, fmt.Errorf("value for key '%s' is not an integer (type: %T)", key, v)
 	}
+}
+
+func isInvalidLeverageError(err error) bool {
+	if err == nil {
+		return false
+	}
+	msg := strings.ToLower(err.Error())
+	return strings.Contains(msg, "-4028") ||
+		strings.Contains(msg, "leverage") && strings.Contains(msg, "not valid") ||
+		strings.Contains(msg, "invalid leverage")
+}
+
+func leverageFallbackCandidates(requested int) []int {
+	base := []int{20, 15, 10, 8, 5, 4, 3, 2, 1}
+	candidates := make([]int, 0, len(base))
+	seen := map[int]bool{}
+	for _, leverage := range base {
+		if leverage >= requested || leverage <= 0 || seen[leverage] {
+			continue
+		}
+		seen[leverage] = true
+		candidates = append(candidates, leverage)
+	}
+	return candidates
 }

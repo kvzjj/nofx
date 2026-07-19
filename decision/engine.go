@@ -1248,21 +1248,21 @@ func extractDecisions(response string) ([]Decision, error) {
 
 	jsonPart = fixMissingQuotes(jsonPart)
 
-	if m := reJSONFence.FindStringSubmatch(jsonPart); m != nil && len(m) > 1 {
-		jsonContent := strings.TrimSpace(m[1])
-		jsonContent = compactArrayOpen(jsonContent)
-		jsonContent = fixMissingQuotes(jsonContent)
-		if err := validateJSONFormat(jsonContent); err != nil {
-			return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
+	decisions, jsonContent, decodeErr := decodeDecisionsFromText(jsonPart)
+	if decodeErr == nil {
+		if len(decisions) == 0 {
+			return []Decision{{
+				Symbol:    "ALL",
+				Action:    "wait",
+				Reasoning: "Model returned an empty decision list; entering safe wait",
+			}}, nil
 		}
-		var decisions []Decision
-		if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-			return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
+		for i := range decisions {
+			normalizeDecision(&decisions[i])
 		}
 		return decisions, nil
 	}
 
-	jsonContent := strings.TrimSpace(reJSONArray.FindString(jsonPart))
 	if jsonContent == "" {
 		logger.Infof("⚠️  [SafeFallback] AI didn't output JSON decision, entering safe wait mode")
 
@@ -1280,19 +1280,19 @@ func extractDecisions(response string) ([]Decision, error) {
 		return []Decision{fallbackDecision}, nil
 	}
 
-	jsonContent = compactArrayOpen(jsonContent)
-	jsonContent = fixMissingQuotes(jsonContent)
+	return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", decodeErr, jsonContent)
+}
 
-	if err := validateJSONFormat(jsonContent); err != nil {
-		return nil, fmt.Errorf("JSON format validation failed: %w\nJSON content: %s\nFull response:\n%s", err, jsonContent, response)
+func normalizeDecision(d *Decision) {
+	d.Symbol = strings.ToUpper(strings.TrimSpace(d.Symbol))
+	d.Symbol = strings.NewReplacer("/", "", "-", "", "_", "", " ", "").Replace(d.Symbol)
+
+	d.Action = strings.ToLower(strings.TrimSpace(d.Action))
+	d.Action = strings.NewReplacer("-", "_", " ", "_").Replace(d.Action)
+	for strings.Contains(d.Action, "__") {
+		d.Action = strings.ReplaceAll(d.Action, "__", "_")
 	}
-
-	var decisions []Decision
-	if err := json.Unmarshal([]byte(jsonContent), &decisions); err != nil {
-		return nil, fmt.Errorf("JSON parsing failed: %w\nJSON content: %s", err, jsonContent)
-	}
-
-	return decisions, nil
+	d.Reasoning = strings.TrimSpace(d.Reasoning)
 }
 
 func fixMissingQuotes(jsonStr string) string {
@@ -1480,17 +1480,23 @@ func ValidateEntryRisk(d *Decision, entryPrice, quantity, minRiskRewardRatio flo
 	riskPerUnit := math.Abs(entryPrice - d.StopLoss)
 	rewardPerUnit := math.Abs(d.TakeProfit - entryPrice)
 	riskRewardRatio := rewardPerUnit / riskPerUnit
-	if riskRewardRatio < minRiskRewardRatio {
+	// Decimal prices that are mathematically on the configured boundary can
+	// produce values such as 2.99999999999998. Do not reject those orders due
+	// solely to binary floating-point representation.
+	if riskRewardRatio+1e-9 < minRiskRewardRatio {
 		return fmt.Errorf("risk/reward ratio too low (%.2f:1), must be ≥%.1f:1 [entry: %.8f stop loss: %.8f take profit: %.8f]",
 			riskRewardRatio, minRiskRewardRatio, entryPrice, d.StopLoss, d.TakeProfit)
 	}
 
 	actualRiskUSD := riskPerUnit * quantity
-	tolerance := math.Max(1e-9, d.RiskUSD*1e-9)
-	if actualRiskUSD > d.RiskUSD+tolerance {
+	if roundUSD(actualRiskUSD) > roundUSD(d.RiskUSD) {
 		return fmt.Errorf("position risk %.2f USD exceeds allowed risk %.2f USD [entry: %.8f stop loss: %.8f quantity: %.8f]",
 			actualRiskUSD, d.RiskUSD, entryPrice, d.StopLoss, quantity)
 	}
 
 	return nil
+}
+
+func roundUSD(value float64) float64 {
+	return math.Round(value*100) / 100
 }

@@ -31,6 +31,23 @@ func TestValidateEntryRisk(t *testing.T) {
 			wantError:  "position risk 50.00 USD exceeds allowed risk 49.99 USD",
 		},
 		{
+			name: "short accepts sub-cent risk excess that rounds to allowance",
+			decision: Decision{
+				Action: "open_short", StopLoss: 4045.86, TakeProfit: 3985.86, RiskUSD: 3.72,
+			},
+			entryPrice: 4030.86,
+			quantity:   0.24808602,
+		},
+		{
+			name: "short rejects risk that rounds above allowance",
+			decision: Decision{
+				Action: "open_short", StopLoss: 4045.88, TakeProfit: 3985.80, RiskUSD: 3.72,
+			},
+			entryPrice: 4030.86,
+			quantity:   0.24808602,
+			wantError:  "position risk 3.73 USD exceeds allowed risk 3.72 USD",
+		},
+		{
 			name: "short uses real entry for reward ratio",
 			decision: Decision{
 				Action: "open_short", StopLoss: 105, TakeProfit: 90, RiskUSD: 50,
@@ -38,6 +55,14 @@ func TestValidateEntryRisk(t *testing.T) {
 			entryPrice: 100,
 			quantity:   10,
 			wantError:  "risk/reward ratio too low (2.00:1)",
+		},
+		{
+			name: "accepts decimal reward ratio exactly on boundary",
+			decision: Decision{
+				Action: "open_short", StopLoss: 204.65, TakeProfit: 199.21, RiskUSD: 100,
+			},
+			entryPrice: 203.29,
+			quantity:   1,
 		},
 		{
 			name: "rejects stop on wrong side of real entry",
