@@ -132,15 +132,16 @@ type Decision struct {
 	Symbol string `json:"symbol"`
 	Action string `json:"action"` // "open_long", "open_short", "close_long", "close_short", "hold", "wait"
 
-	// Opening position parameters
+	// Opening position parameters. Size, leverage, and risk are backend-owned;
+	// these fields remain for execution records and legacy response decoding.
 	Leverage        int     `json:"leverage,omitempty"`
 	PositionSizeUSD float64 `json:"position_size_usd,omitempty"`
 	StopLoss        float64 `json:"stop_loss,omitempty"`
 	TakeProfit      float64 `json:"take_profit,omitempty"`
 
 	// Common parameters
-	Confidence int     `json:"confidence,omitempty"` // Confidence level (0-100)
-	RiskUSD    float64 `json:"risk_usd,omitempty"`   // Maximum USD risk
+	Confidence int     `json:"confidence,omitempty"` // Legacy; not an authorization input
+	RiskUSD    float64 `json:"risk_usd,omitempty"`   // Backend-calculated actual risk
 	Reasoning  string  `json:"reasoning"`
 }
 
@@ -627,17 +628,19 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("# Hard Constraints (Risk Control)\n\n")
 	sb.WriteString("## CODE ENFORCED (Backend validation, cannot be bypassed):\n")
 	sb.WriteString(fmt.Sprintf("- Max Positions: %d coins simultaneously\n", riskControl.MaxPositions))
-	sb.WriteString(fmt.Sprintf("- Max Opening Order: ≤%.0f USDT notional\n", riskControl.MaxPositionSize))
-	sb.WriteString(fmt.Sprintf("- Max Total Positions: ≤%.0f USDT notional\n", riskControl.MaxTotalPositionSize))
+	sb.WriteString(fmt.Sprintf("- Per-trade loss budget: ≤%.2f%% of account equity\n", PerTradeRiskPct))
+	sb.WriteString(fmt.Sprintf("- Aggregate open-position loss budget: ≤%.2f%% of account equity\n", MaxPortfolioRiskPct))
+	sb.WriteString(fmt.Sprintf("- Daily loss halt: %.2f%% | account drawdown halt: %.2f%%\n", DailyLossHaltPct, AccountDrawdownHaltPct))
+	sb.WriteString(fmt.Sprintf("- Max Opening Order: ≤%.0f USDT notional (secondary cap)\n", riskControl.MaxPositionSize))
+	sb.WriteString(fmt.Sprintf("- Max Total Positions: ≤%.0f USDT notional (secondary cap)\n", riskControl.MaxTotalPositionSize))
 	sb.WriteString(fmt.Sprintf("- Min Position Size: ≥%.0f USDT\n\n", riskControl.MinPositionSize))
 
 	sb.WriteString("## ENTRY RULES (Backend validated):\n")
-	sb.WriteString(fmt.Sprintf("- Trading Leverage: Non-BTC/ETH instruments (including equity-linked contracts) max %dx | BTC/ETH max %dx\n",
+	sb.WriteString(fmt.Sprintf("- Backend-calculated leverage: Non-BTC/ETH instruments max %dx | BTC/ETH max %dx\n",
 		riskControl.AltcoinMaxLeverage, riskControl.BTCETHMaxLeverage))
 	sb.WriteString(fmt.Sprintf("- Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss)\n", riskControl.MinRiskRewardRatio))
-	sb.WriteString("- Dollar Risk: abs(expected_entry_price - stop_loss) × quantity ≤ risk_usd\n")
-	sb.WriteString("- Quantity: position_size_usd / expected_entry_price; risk_usd is a hard maximum, not an estimate\n")
-	sb.WriteString(fmt.Sprintf("- Min Confidence: ≥%d to open position\n\n", riskControl.MinConfidence))
+	sb.WriteString("- The backend alone decides whether an entry is allowed and calculates quantity/leverage from equity, stop distance, ATR, liquidity, and margin\n")
+	sb.WriteString("- Do not output leverage, position_size_usd, risk_usd, or confidence\n\n")
 
 	// 4. Trading frequency (editable)
 	if promptSections.TradingFrequency != "" {
@@ -656,12 +659,12 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 		sb.WriteString(promptSections.EntryStandards)
 		sb.WriteString("\n\nYou have the following indicator data:\n")
 		e.writeAvailableIndicators(&sb)
-		sb.WriteString(fmt.Sprintf("\n**Confidence ≥ %d** required to open positions.\n\n", riskControl.MinConfidence))
+		sb.WriteString("\nThe backend independently accepts or rejects every proposed entry.\n\n")
 	} else {
 		sb.WriteString("# 🎯 Entry Standards (Strict)\n\n")
 		sb.WriteString("Only open positions when multiple signals resonate. You have:\n")
 		e.writeAvailableIndicators(&sb)
-		sb.WriteString(fmt.Sprintf("\nFeel free to use any effective analysis method, but **confidence ≥ %d** required to open positions; avoid low-quality behaviors such as single indicators, contradictory signals, sideways consolidation, reopening immediately after closing, etc.\n\n", riskControl.MinConfidence))
+		sb.WriteString("\nUse any effective analysis method, but avoid low-quality behaviors such as single indicators, contradictory signals, sideways consolidation, and reopening immediately after closing.\n\n")
 	}
 
 	// 6. Decision process (editable)
@@ -686,15 +689,14 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString("<decision>\n")
 	sb.WriteString("Step 2: JSON decision array\n\n")
 	sb.WriteString("```json\n[\n")
-	sb.WriteString(fmt.Sprintf("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"leverage\": %d, \"position_size_usd\": %.0f, \"stop_loss\": 97000, \"take_profit\": 91000, \"confidence\": 85, \"risk_usd\": 300},\n",
-		riskControl.BTCETHMaxLeverage, riskControl.MaxPositionSize))
+	sb.WriteString("  {\"symbol\": \"BTCUSDT\", \"action\": \"open_short\", \"stop_loss\": 97000, \"take_profit\": 91000, \"reasoning\": \"breakdown invalidates above 97000\"},\n")
 	sb.WriteString("  {\"symbol\": \"ETHUSDT\", \"action\": \"close_long\"}\n")
 	sb.WriteString("]\n```\n")
 	sb.WriteString("</decision>\n\n")
 	sb.WriteString("## Field Description\n\n")
 	sb.WriteString("- `action`: open_long | open_short | close_long | close_short | hold | wait\n")
-	sb.WriteString(fmt.Sprintf("- `confidence`: 0-100 (opening recommended ≥ %d)\n", riskControl.MinConfidence))
-	sb.WriteString("- Required when opening: leverage, position_size_usd, stop_loss, take_profit, confidence, risk_usd\n")
+	sb.WriteString("- Required when opening: symbol, action, stop_loss (invalidation price), take_profit (target price), reasoning\n")
+	sb.WriteString("- Position size, leverage, risk budget, and trade permission are backend-owned and must be omitted\n")
 	sb.WriteString("- **IMPORTANT**: All numeric values must be calculated numbers, NOT formulas/expressions (e.g., use `27.76` not `3000 * 0.01`)\n\n")
 
 	// 8. Custom Prompt
@@ -1410,32 +1412,6 @@ func validateDecision(d *Decision, accountEquity float64, riskControl store.Risk
 	}
 
 	if d.Action == "open_long" || d.Action == "open_short" {
-		maxLeverage := riskControl.AltcoinMaxLeverage
-		if d.Symbol == "BTCUSDT" || d.Symbol == "ETHUSDT" {
-			maxLeverage = riskControl.BTCETHMaxLeverage
-		}
-
-		if d.Leverage <= 0 {
-			return fmt.Errorf("leverage must be greater than 0: %d", d.Leverage)
-		}
-		if d.Leverage > maxLeverage {
-			logger.Infof("⚠️  [Leverage Fallback] %s leverage exceeded (%dx > %dx), auto-adjusting to limit %dx",
-				d.Symbol, d.Leverage, maxLeverage, maxLeverage)
-			d.Leverage = maxLeverage
-		}
-		if d.PositionSizeUSD <= 0 {
-			return fmt.Errorf("position size must be greater than 0: %.2f", d.PositionSizeUSD)
-		}
-		if d.Confidence < riskControl.MinConfidence {
-			return fmt.Errorf("confidence too low (%d), must be ≥%d", d.Confidence, riskControl.MinConfidence)
-		}
-
-		if d.PositionSizeUSD < riskControl.MinPositionSize {
-			return fmt.Errorf("opening amount too small (%.2f USDT), must be ≥%.2f USDT", d.PositionSizeUSD, riskControl.MinPositionSize)
-		}
-		if riskControl.MaxPositionSize > 0 && d.PositionSizeUSD > riskControl.MaxPositionSize {
-			d.PositionSizeUSD = riskControl.MaxPositionSize
-		}
 		if d.StopLoss <= 0 || d.TakeProfit <= 0 {
 			return fmt.Errorf("stop loss and take profit must be greater than 0")
 		}
@@ -1443,8 +1419,7 @@ func validateDecision(d *Decision, accountEquity float64, riskControl store.Risk
 		if entryPrice <= 0 {
 			return fmt.Errorf("current entry price unavailable for %s", d.Symbol)
 		}
-		quantity := d.PositionSizeUSD / entryPrice
-		if err := ValidateEntryRisk(d, entryPrice, quantity, riskControl.MinRiskRewardRatio); err != nil {
+		if err := ValidateEntryIntent(d, entryPrice, riskControl.MinRiskRewardRatio); err != nil {
 			return err
 		}
 	}
@@ -1452,19 +1427,12 @@ func validateDecision(d *Decision, accountEquity float64, riskControl store.Risk
 	return nil
 }
 
-// ValidateEntryRisk enforces stop placement, risk/reward, and the maximum USD
-// loss using the actual or expected entry price and submitted quantity.
-func ValidateEntryRisk(d *Decision, entryPrice, quantity, minRiskRewardRatio float64) error {
+// ValidateEntryIntent validates the direction, invalidation price, and target
+// supplied by the AI without trusting AI-supplied amount, leverage, or risk.
+func ValidateEntryIntent(d *Decision, entryPrice, minRiskRewardRatio float64) error {
 	if entryPrice <= 0 {
 		return fmt.Errorf("entry price must be greater than 0: %.8f", entryPrice)
 	}
-	if quantity <= 0 {
-		return fmt.Errorf("quantity must be greater than 0: %.8f", quantity)
-	}
-	if d.RiskUSD <= 0 {
-		return fmt.Errorf("risk_usd must be greater than 0: %.2f", d.RiskUSD)
-	}
-
 	if d.Action == "open_long" {
 		if d.StopLoss >= entryPrice || d.TakeProfit <= entryPrice {
 			return fmt.Errorf("for long positions, prices must satisfy stop loss < entry < take profit [stop loss: %.8f entry: %.8f take profit: %.8f]", d.StopLoss, entryPrice, d.TakeProfit)
@@ -1480,14 +1448,28 @@ func ValidateEntryRisk(d *Decision, entryPrice, quantity, minRiskRewardRatio flo
 	riskPerUnit := math.Abs(entryPrice - d.StopLoss)
 	rewardPerUnit := math.Abs(d.TakeProfit - entryPrice)
 	riskRewardRatio := rewardPerUnit / riskPerUnit
-	// Decimal prices that are mathematically on the configured boundary can
-	// produce values such as 2.99999999999998. Do not reject those orders due
-	// solely to binary floating-point representation.
 	if riskRewardRatio+1e-9 < minRiskRewardRatio {
 		return fmt.Errorf("risk/reward ratio too low (%.2f:1), must be ≥%.1f:1 [entry: %.8f stop loss: %.8f take profit: %.8f]",
 			riskRewardRatio, minRiskRewardRatio, entryPrice, d.StopLoss, d.TakeProfit)
 	}
+	return nil
+}
 
+// ValidateEntryRisk enforces stop placement, risk/reward, and the maximum USD
+// loss using the actual or expected entry price and submitted quantity.
+func ValidateEntryRisk(d *Decision, entryPrice, quantity, minRiskRewardRatio float64) error {
+	if quantity <= 0 {
+		return fmt.Errorf("quantity must be greater than 0: %.8f", quantity)
+	}
+	if d.RiskUSD <= 0 {
+		return fmt.Errorf("risk_usd must be greater than 0: %.2f", d.RiskUSD)
+	}
+
+	if err := ValidateEntryIntent(d, entryPrice, minRiskRewardRatio); err != nil {
+		return err
+	}
+
+	riskPerUnit := math.Abs(entryPrice - d.StopLoss)
 	actualRiskUSD := riskPerUnit * quantity
 	if roundUSD(actualRiskUSD) > roundUSD(d.RiskUSD) {
 		return fmt.Errorf("position risk %.2f USD exceeds allowed risk %.2f USD [entry: %.8f stop loss: %.8f quantity: %.8f]",

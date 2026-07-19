@@ -124,6 +124,7 @@ type AutoTrader struct {
 	overrideBasePrompt    bool   // Whether to override base prompt
 	lastResetTime         time.Time
 	stopUntil             time.Time
+	manualReviewRequired  bool
 	lifecycleMutex        sync.Mutex
 	isRunning             bool
 	isStopping            bool
@@ -242,10 +243,8 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	if config.ProtectionFailureAction == "" {
 		config.ProtectionFailureAction = "close"
 	}
-	switch strings.ToLower(config.ProtectionFailureAction) {
-	case "close", "reduce", "keep_unprotected":
-	default:
-		logger.Warnf("[%s] unsupported protection failure action %q, falling back to close", config.Name, config.ProtectionFailureAction)
+	if !strings.EqualFold(config.ProtectionFailureAction, "close") {
+		logger.Warnf("[%s] protection failure action %q is unsafe; enforcing immediate close", config.Name, config.ProtectionFailureAction)
 		config.ProtectionFailureAction = "close"
 	}
 	if config.ProtectionFailureReducePct <= 0 || config.ProtectionFailureReducePct > 100 {
@@ -395,7 +394,8 @@ func (at *AutoTrader) run(stopCh <-chan struct{}) error {
 	logger.Info("🚀 AI-driven automatic trading system started")
 	logger.Infof("💰 Initial balance: %.2f USDT", at.initialBalance)
 	logger.Infof("⚙️  Scan interval: %v", at.config.ScanInterval)
-	logger.Info("🤖 AI will make full decisions on leverage, position size, stop loss/take profit, etc.")
+	logger.Info("🤖 AI proposes direction/invalidation/target; backend determines permission, size, and leverage")
+	at.resumeEntryOrderSagas()
 	// Start drawdown monitoring
 	at.startDrawdownMonitor(stopCh)
 
@@ -910,25 +910,19 @@ func (at *AutoTrader) enforceEntryDecision(d *decision.Decision) error {
 	at.riskMutex.Lock()
 	paused := time.Now().Before(at.stopUntil)
 	until := at.stopUntil
+	manualReviewRequired := at.manualReviewRequired
 	at.riskMutex.Unlock()
+	if manualReviewRequired {
+		return fmt.Errorf("❌ [RISK CONTROL] account drawdown halt requires manual review")
+	}
 	if paused {
 		return fmt.Errorf("❌ [RISK CONTROL] new entries paused until %s", until.Format(time.RFC3339))
 	}
 	if at.config.StrategyConfig == nil {
 		return nil
 	}
-	riskControl := at.config.StrategyConfig.RiskControl
-	if d.Confidence < riskControl.MinConfidence {
-		return fmt.Errorf("❌ [RISK CONTROL] Confidence %d below minimum %d", d.Confidence, riskControl.MinConfidence)
-	}
-	maxLeverage := riskControl.AltcoinMaxLeverage
-	if isBTCETHSymbol(d.Symbol) {
-		maxLeverage = riskControl.BTCETHMaxLeverage
-	}
-	if maxLeverage > 0 && d.Leverage > maxLeverage {
-		logger.Infof("  ⚠️ [RISK CONTROL] Leverage %dx exceeds limit %dx, capping", d.Leverage, maxLeverage)
-		d.Leverage = maxLeverage
-	}
+	// AI-supplied confidence, amount, risk, and leverage are intentionally not
+	// consulted. The submit path overwrites them with a backend EntryPlan.
 	return nil
 }
 
@@ -1057,41 +1051,6 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	if err != nil {
 		return fmt.Errorf("failed to get account balance: %w", err)
 	}
-	availableBalance, ok := accountNumber(balance,
-		"availableBalance", "available_balance", "available", "availBal")
-	if !ok {
-		return fmt.Errorf("failed to determine available balance from exchange response")
-	}
-	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
-
-	// ⚠️ Auto-adjust position size if insufficient margin
-	// Formula: totalRequired = positionSize/leverage + positionSize*0.001 + positionSize/leverage*0.01
-	//        = positionSize * (1.01/leverage + 0.001)
-	marginFactor := 1.01/float64(decision.Leverage) + 0.001
-	maxAffordablePositionSize := availableBalance / marginFactor
-
-	actualPositionSize := decision.PositionSizeUSD
-	if actualPositionSize > maxAffordablePositionSize {
-		// Use 98% of max to leave buffer for price fluctuation
-		adjustedSize := maxAffordablePositionSize * 0.98
-		logger.Infof("  ⚠️ Position size %.2f exceeds max affordable %.2f, auto-reducing to %.2f",
-			actualPositionSize, maxAffordablePositionSize, adjustedSize)
-		actualPositionSize = adjustedSize
-		decision.PositionSizeUSD = actualPositionSize
-	}
-
-	// [CODE ENFORCED] Minimum position size check
-	if err := at.enforceMinPositionSize(decision.PositionSizeUSD); err != nil {
-		return err
-	}
-	// Account-level projected margin must use the final amount that will
-	// actually be submitted, after strategy caps and affordability reduction.
-	// Checking the raw AI request here would reject orders that are safe after
-	// the execution layer's own sizing adjustments.
-	if err := at.enforceAccountEntryRisk(positions, balance, actualPositionSize, decision.Leverage, marketData); err != nil {
-		return err
-	}
-
 	// Fetch directly from the exchange immediately before submission. Limit
 	// orders use their intended fill price; market orders use the latest price.
 	latestPrice, err := at.trader.GetMarketPrice(decision.Symbol)
@@ -1106,10 +1065,22 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	if orderOptions.Type == OrderTypeLimit {
 		expectedEntryPrice = orderOptions.LimitPrice
 	}
-	quantity := actualPositionSize / expectedEntryPrice
+	plan, err := at.buildBackendEntryPlan(decision, expectedEntryPrice, positions, balance, marketData)
+	if err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %w", err)
+	}
+	decision.PositionSizeUSD = plan.PositionSizeUSD
+	decision.Leverage = plan.Leverage
+	decision.RiskUSD = plan.ActualRiskUSD
+	if err := at.enforceAccountEntryRisk(positions, balance, plan.PositionSizeUSD, plan.Leverage, marketData); err != nil {
+		return err
+	}
+	quantity := plan.Quantity
 	if err := validateEntryRiskBeforeSubmit(decision, expectedEntryPrice, quantity, at.config.StrategyConfig); err != nil {
 		return err
 	}
+	logger.Infof("  🛡 Backend sizing: risk budget %.2f USD, actual risk %.2f USD, notional %.2f USDT, leverage %dx",
+		plan.RiskBudgetUSD, plan.ActualRiskUSD, plan.PositionSizeUSD, plan.Leverage)
 	actionRecord.Quantity = quantity
 	actionRecord.Price = expectedEntryPrice
 
@@ -1131,19 +1102,24 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	}
 
 	logger.Infof("  ✓ Open order submitted, order ID: %v, quantity: %.4f", order["orderId"], quantity)
+	at.persistEntryOrderState(getOrderIDString(order), decision.Symbol, "open_long", quantity,
+		numberValue(order["executedQty"]), numberValue(order["avgPrice"]), numberValue(order["commission"]),
+		normalizeOrderState(fmt.Sprint(order["status"])), decision.Leverage, decision.StopLoss, decision.TakeProfit, 0, "UNPROTECTED", nil)
 
 	// Record order to database and poll for confirmation
 	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_long", quantity, expectedEntryPrice, decision.Leverage, 0) {
 		if isLimitOrderResult(order) {
-			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
+			logger.Infof("  ⏳ Limit order is pending; every observed partial fill will be protected immediately")
 			at.monitorPendingEntryOrder(order, decision.Symbol, "open_long", "LONG", quantity, expectedEntryPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
 			// A resting limit order is an accepted execution, not a failure. The
 			// background monitor owns fill recording and protection placement.
 			return nil
 		}
-		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
+		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 {
 			orderID := getOrderIDString(order)
-			at.recordPositionChange(orderID, decision.Symbol, "LONG", "open_long", executedQty, avgPrice, decision.Leverage, 0, numberValue(order["commission"]))
+			if avgPrice > 0 {
+				at.recordPositionChange(orderID, decision.Symbol, "LONG", "open_long", executedQty, avgPrice, decision.Leverage, 0, numberValue(order["commission"]))
+			}
 			if err := at.protectOpenedPosition(decision.Symbol, "LONG", executedQty, decision.StopLoss, decision.TakeProfit, orderID); err != nil {
 				return err
 			}
@@ -1203,41 +1179,6 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	if err != nil {
 		return fmt.Errorf("failed to get account balance: %w", err)
 	}
-	availableBalance, ok := accountNumber(balance,
-		"availableBalance", "available_balance", "available", "availBal")
-	if !ok {
-		return fmt.Errorf("failed to determine available balance from exchange response")
-	}
-	decision.PositionSizeUSD = at.enforcePositionSizeLimits(decision.PositionSizeUSD, positions)
-
-	// ⚠️ Auto-adjust position size if insufficient margin
-	// Formula: totalRequired = positionSize/leverage + positionSize*0.001 + positionSize/leverage*0.01
-	//        = positionSize * (1.01/leverage + 0.001)
-	marginFactor := 1.01/float64(decision.Leverage) + 0.001
-	maxAffordablePositionSize := availableBalance / marginFactor
-
-	actualPositionSize := decision.PositionSizeUSD
-	if actualPositionSize > maxAffordablePositionSize {
-		// Use 98% of max to leave buffer for price fluctuation
-		adjustedSize := maxAffordablePositionSize * 0.98
-		logger.Infof("  ⚠️ Position size %.2f exceeds max affordable %.2f, auto-reducing to %.2f",
-			actualPositionSize, maxAffordablePositionSize, adjustedSize)
-		actualPositionSize = adjustedSize
-		decision.PositionSizeUSD = actualPositionSize
-	}
-
-	// [CODE ENFORCED] Minimum position size check
-	if err := at.enforceMinPositionSize(decision.PositionSizeUSD); err != nil {
-		return err
-	}
-	// Account-level projected margin must use the final amount that will
-	// actually be submitted, after strategy caps and affordability reduction.
-	// Checking the raw AI request here would reject orders that are safe after
-	// the execution layer's own sizing adjustments.
-	if err := at.enforceAccountEntryRisk(positions, balance, actualPositionSize, decision.Leverage, marketData); err != nil {
-		return err
-	}
-
 	// Fetch directly from the exchange immediately before submission. Limit
 	// orders use their intended fill price; market orders use the latest price.
 	latestPrice, err := at.trader.GetMarketPrice(decision.Symbol)
@@ -1252,10 +1193,22 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	if orderOptions.Type == OrderTypeLimit {
 		expectedEntryPrice = orderOptions.LimitPrice
 	}
-	quantity := actualPositionSize / expectedEntryPrice
+	plan, err := at.buildBackendEntryPlan(decision, expectedEntryPrice, positions, balance, marketData)
+	if err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %w", err)
+	}
+	decision.PositionSizeUSD = plan.PositionSizeUSD
+	decision.Leverage = plan.Leverage
+	decision.RiskUSD = plan.ActualRiskUSD
+	if err := at.enforceAccountEntryRisk(positions, balance, plan.PositionSizeUSD, plan.Leverage, marketData); err != nil {
+		return err
+	}
+	quantity := plan.Quantity
 	if err := validateEntryRiskBeforeSubmit(decision, expectedEntryPrice, quantity, at.config.StrategyConfig); err != nil {
 		return err
 	}
+	logger.Infof("  🛡 Backend sizing: risk budget %.2f USD, actual risk %.2f USD, notional %.2f USDT, leverage %dx",
+		plan.RiskBudgetUSD, plan.ActualRiskUSD, plan.PositionSizeUSD, plan.Leverage)
 	actionRecord.Quantity = quantity
 	actionRecord.Price = expectedEntryPrice
 
@@ -1277,19 +1230,24 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	}
 
 	logger.Infof("  ✓ Open order submitted, order ID: %v, quantity: %.4f", order["orderId"], quantity)
+	at.persistEntryOrderState(getOrderIDString(order), decision.Symbol, "open_short", quantity,
+		numberValue(order["executedQty"]), numberValue(order["avgPrice"]), numberValue(order["commission"]),
+		normalizeOrderState(fmt.Sprint(order["status"])), decision.Leverage, decision.StopLoss, decision.TakeProfit, 0, "UNPROTECTED", nil)
 
 	// Record order to database and poll for confirmation
 	if !at.recordAndConfirmOrder(order, decision.Symbol, "open_short", quantity, expectedEntryPrice, decision.Leverage, 0) {
 		if isLimitOrderResult(order) {
-			logger.Infof("  ⏳ Limit order is pending, skip local position record and SL/TP until it fills")
+			logger.Infof("  ⏳ Limit order is pending; every observed partial fill will be protected immediately")
 			at.monitorPendingEntryOrder(order, decision.Symbol, "open_short", "SHORT", quantity, expectedEntryPrice, decision.Leverage, decision.StopLoss, decision.TakeProfit)
 			// A resting limit order is an accepted execution, not a failure. The
 			// background monitor owns fill recording and protection placement.
 			return nil
 		}
-		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 && avgPrice > 0 {
+		if executedQty, avgPrice := numberValue(order["executedQty"]), numberValue(order["avgPrice"]); executedQty > 0 {
 			orderID := getOrderIDString(order)
-			at.recordPositionChange(orderID, decision.Symbol, "SHORT", "open_short", executedQty, avgPrice, decision.Leverage, 0, numberValue(order["commission"]))
+			if avgPrice > 0 {
+				at.recordPositionChange(orderID, decision.Symbol, "SHORT", "open_short", executedQty, avgPrice, decision.Leverage, 0, numberValue(order["commission"]))
+			}
 			if err := at.protectOpenedPosition(decision.Symbol, "SHORT", executedQty, decision.StopLoss, decision.TakeProfit, orderID); err != nil {
 				return err
 			}
@@ -2037,6 +1995,41 @@ func (at *AutoTrader) persistOrderState(orderID, symbol, action string, requeste
 	}
 }
 
+func (at *AutoTrader) persistEntryOrderState(orderID, symbol, action string, requestedQty, executedQty, avgPrice, fee float64, state OrderState, leverage int, stopLoss, takeProfit, protectedQty float64, protectionStatus string, lastErr error) {
+	if at.store == nil {
+		return
+	}
+	errText := ""
+	if lastErr != nil {
+		errText = lastErr.Error()
+	}
+	order := store.TradeOrder{
+		TraderID: at.id, ExchangeID: at.exchangeID, ExchangeType: at.exchange,
+		OrderID: orderID, Symbol: symbol, PositionSide: orderPositionSide(action), Action: action,
+		RequestedQty: requestedQty, ExecutedQty: executedQty, AvgPrice: avgPrice, Fee: fee,
+		Status: string(state), LastError: errText, Leverage: leverage, StopLoss: stopLoss,
+		TakeProfit: takeProfit, ProtectedQty: protectedQty, ProtectionStatus: protectionStatus,
+	}
+	if err := at.store.Execution().UpsertOrder(order); err != nil {
+		logger.Errorf("[%s] failed to persist entry order %s state %s: %v", at.name, orderID, state, err)
+		return
+	}
+	if executedQty > 0 && avgPrice > 0 {
+		if err := at.store.Execution().RecordFill(order); err != nil {
+			logger.Errorf("[%s] failed to persist fill for entry order %s: %v", at.name, orderID, err)
+		}
+	}
+}
+
+func (at *AutoTrader) updateOrderProtection(entryOrderID string, protectedQty float64, status string) {
+	if at.store == nil || entryOrderID == "" || entryOrderID == "0" {
+		return
+	}
+	if err := at.store.Execution().UpdateOrderProtection(at.id, at.exchangeID, entryOrderID, protectedQty, status); err != nil {
+		logger.Errorf("[%s] failed to update order %s protection state: %v", at.name, entryOrderID, err)
+	}
+}
+
 func (at *AutoTrader) persistProtection(entryOrderID, symbol, positionSide, kind string, quantity, triggerPrice float64, status string, attempt int, lastErr error) {
 	if at.store == nil {
 		return
@@ -2073,10 +2066,69 @@ func (at *AutoTrader) cancelPendingOrder(symbol, orderID string) bool {
 	return true
 }
 
+func (at *AutoTrader) resumeEntryOrderSagas() {
+	if at.store == nil {
+		return
+	}
+	orders, err := at.store.Execution().ListRecoverableEntryOrders(at.id, at.exchangeID)
+	if err != nil {
+		logger.Errorf("[%s] failed to load recoverable entry orders: %v", at.name, err)
+		return
+	}
+	for _, order := range orders {
+		if order.StopLoss <= 0 || order.TakeProfit <= 0 {
+			logger.Errorf("[%s] recoverable order %s has incomplete protection intent; closing any fill", at.name, order.OrderID)
+			at.cancelPendingOrder(order.Symbol, order.OrderID)
+			if status, statusErr := at.trader.GetOrderStatus(order.Symbol, order.OrderID); statusErr == nil {
+				order.Status = string(normalizeOrderState(fmt.Sprint(status["status"])))
+				order.ExecutedQty = numberValue(status["executedQty"])
+				order.AvgPrice = numberValue(status["avgPrice"])
+				order.Fee = numberValue(status["commission"])
+			}
+			if order.ExecutedQty > order.ProtectedQty {
+				_ = at.protectPositionIncrement(order.Symbol, order.PositionSide, order.ExecutedQty-order.ProtectedQty, order.ExecutedQty, order.StopLoss, order.TakeProfit, order.OrderID)
+			}
+			continue
+		}
+		status, statusErr := at.trader.GetOrderStatus(order.Symbol, order.OrderID)
+		if statusErr == nil {
+			order.Status = string(normalizeOrderState(fmt.Sprint(status["status"])))
+			order.ExecutedQty = numberValue(status["executedQty"])
+			order.AvgPrice = numberValue(status["avgPrice"])
+			order.Fee = numberValue(status["commission"])
+		} else {
+			logger.Warnf("[%s] resuming order %s from persisted state because exchange status failed: %v", at.name, order.OrderID, statusErr)
+		}
+		state := normalizeOrderState(order.Status)
+		result := map[string]interface{}{
+			"orderId": order.OrderID, "status": string(state), "executedQty": order.ExecutedQty,
+			"avgPrice": order.AvgPrice, "commission": order.Fee, "type": "LIMIT",
+		}
+		if state == OrderStateSubmitted || state == OrderStatePartial {
+			logger.Infof("[%s] resuming pending entry order %s (%s)", at.name, order.OrderID, state)
+			at.monitorPendingEntryOrderState(result, order.Symbol, order.Action, order.PositionSide,
+				order.RequestedQty, order.AvgPrice, order.Leverage, order.StopLoss, order.TakeProfit, order.ProtectedQty)
+			continue
+		}
+		if order.ExecutedQty > order.ProtectedQty+1e-9 {
+			if _, err := at.projectAndProtectEntryFill(order.OrderID, order.Symbol, order.Action, order.PositionSide,
+				order.RequestedQty, order.ExecutedQty, order.AvgPrice, order.Fee, order.Leverage,
+				order.StopLoss, order.TakeProfit, order.ProtectedQty, state); err != nil {
+				logger.Errorf("[%s] failed to recover protection for order %s: %v", at.name, order.OrderID, err)
+			}
+		}
+	}
+}
+
 // protectOpenedPosition completes the opening saga. A position is not a
 // successful business operation until both protective legs are installed.
 func (at *AutoTrader) protectOpenedPosition(symbol, positionSide string, quantity, stopLoss, takeProfit float64, entryOrderID string) error {
+	return at.protectPositionIncrement(symbol, positionSide, quantity, quantity, stopLoss, takeProfit, entryOrderID)
+}
+
+func (at *AutoTrader) protectPositionIncrement(symbol, positionSide string, installQuantity, cumulativeQuantity, stopLoss, takeProfit float64, entryOrderID string) error {
 	at.updateProtectionStatus(entryOrderID, "PROTECTING")
+	at.updateOrderProtection(entryOrderID, cumulativeQuantity-installQuantity, "PROTECTING")
 	retries := at.config.ProtectionRetries
 	if retries <= 0 {
 		retries = 3
@@ -2087,29 +2139,35 @@ func (at *AutoTrader) protectOpenedPosition(symbol, positionSide string, quantit
 	}
 
 	var stopErr, takeErr error
+	if stopLoss <= 0 || takeProfit <= 0 {
+		stopErr = fmt.Errorf("invalid persisted stop-loss %.8f", stopLoss)
+		takeErr = fmt.Errorf("invalid persisted take-profit %.8f", takeProfit)
+		retries = 0
+	}
 	stopInstalled := false
 	takeInstalled := false
 	for attempt := 1; attempt <= retries; attempt++ {
 		if !stopInstalled {
-			stopErr = at.trader.SetStopLoss(symbol, positionSide, quantity, stopLoss)
+			stopErr = at.trader.SetStopLoss(symbol, positionSide, installQuantity, stopLoss)
 			stopInstalled = stopErr == nil
 			status := "FAILED"
 			if stopInstalled {
 				status = "ACTIVE"
 			}
-			at.persistProtection(entryOrderID, symbol, positionSide, "STOP_LOSS", quantity, stopLoss, status, attempt, stopErr)
+			at.persistProtection(entryOrderID, symbol, positionSide, "STOP_LOSS", cumulativeQuantity, stopLoss, status, attempt, stopErr)
 		}
 		if !takeInstalled {
-			takeErr = at.trader.SetTakeProfit(symbol, positionSide, quantity, takeProfit)
+			takeErr = at.trader.SetTakeProfit(symbol, positionSide, installQuantity, takeProfit)
 			takeInstalled = takeErr == nil
 			status := "FAILED"
 			if takeInstalled {
 				status = "ACTIVE"
 			}
-			at.persistProtection(entryOrderID, symbol, positionSide, "TAKE_PROFIT", quantity, takeProfit, status, attempt, takeErr)
+			at.persistProtection(entryOrderID, symbol, positionSide, "TAKE_PROFIT", cumulativeQuantity, takeProfit, status, attempt, takeErr)
 		}
 		if stopInstalled && takeInstalled {
 			at.updateProtectionStatus(entryOrderID, "PROTECTED")
+			at.updateOrderProtection(entryOrderID, cumulativeQuantity, "PROTECTED")
 			return nil
 		}
 		if attempt < retries {
@@ -2119,29 +2177,18 @@ func (at *AutoTrader) protectOpenedPosition(symbol, positionSide string, quantit
 	}
 
 	at.updateProtectionStatus(entryOrderID, "UNPROTECTED")
+	at.updateOrderProtection(entryOrderID, cumulativeQuantity-installQuantity, "UNPROTECTED")
 	protectionErr := fmt.Errorf("position %s %s is UNPROTECTED after %d attempts (stop=%v, take=%v)", symbol, positionSide, retries, stopErr, takeErr)
 	logger.Errorf("[%s] CRITICAL: %v", at.name, protectionErr)
 
-	failureAction := at.config.ProtectionFailureAction
-	if failureAction == "" {
-		failureAction = "close"
-	}
-	if strings.EqualFold(failureAction, "close") || strings.EqualFold(failureAction, "reduce") {
-		closeQuantity := quantity
-		isReduction := strings.EqualFold(failureAction, "reduce")
-		if isReduction {
-			closeQuantity = quantity * at.config.ProtectionFailureReducePct / 100
-		}
+	{
+		closeQuantity := cumulativeQuantity
 		var order map[string]interface{}
 		var err error
-		closeArgument := 0.0
-		if isReduction {
-			closeArgument = closeQuantity
-		}
 		if positionSide == "LONG" {
-			order, err = at.trader.CloseLong(symbol, closeArgument)
+			order, err = at.trader.CloseLong(symbol, 0)
 		} else {
-			order, err = at.trader.CloseShort(symbol, closeArgument)
+			order, err = at.trader.CloseShort(symbol, 0)
 		}
 		if err != nil {
 			return fmt.Errorf("%w; automatic close submission failed: %v", protectionErr, err)
@@ -2156,22 +2203,59 @@ func (at *AutoTrader) protectOpenedPosition(symbol, positionSide string, quantit
 		if filledQty := numberValue(order["executedQty"]); filledQty+1e-9 < closeQuantity {
 			return fmt.Errorf("%w; automatic close order %s only filled %.8f of %.8f", protectionErr, getOrderIDString(order), filledQty, closeQuantity)
 		}
-		if isReduction {
-			logger.Errorf("[%s] unprotected %s %s was automatically reduced by %.2f%% and remains UNPROTECTED", at.name, symbol, positionSide, at.config.ProtectionFailureReducePct)
-		} else {
-			at.cancelPositionOrders(symbol, positionSide)
-			logger.Errorf("[%s] unprotected %s %s was automatically closed", at.name, symbol, positionSide)
-		}
+		at.cancelPositionOrders(symbol, positionSide)
+		at.updateOrderProtection(entryOrderID, cumulativeQuantity, "CLOSED")
+		logger.Errorf("[%s] unprotected %s %s was automatically closed", at.name, symbol, positionSide)
 	}
 	return protectionErr
 }
 
+func (at *AutoTrader) projectAndProtectEntryFill(orderID, symbol, action, positionSide string, requestedQty, executedQty, avgPrice, fee float64, leverage int, stopLoss, takeProfit, protectedQty float64, state OrderState) (float64, error) {
+	if executedQty <= 0 {
+		return protectedQty, nil
+	}
+	at.persistEntryOrderState(orderID, symbol, action, requestedQty, executedQty, avgPrice, fee, state, leverage, stopLoss, takeProfit, protectedQty, "UNPROTECTED", nil)
+	if at.store != nil && avgPrice > 0 {
+		pos := &store.TraderPosition{
+			TraderID: at.id, ExchangeID: at.exchangeID, ExchangeType: at.exchange,
+			Symbol: symbol, Side: positionSide, Quantity: executedQty, EntryPrice: avgPrice,
+			EntryOrderID: orderID, EntryTime: time.Now(), Leverage: leverage, Fee: fee,
+		}
+		if err := at.store.Position().UpsertEntryFill(pos); err != nil {
+			return protectedQty, fmt.Errorf("failed to project entry fill: %w", err)
+		}
+	}
+	if executedQty <= protectedQty+1e-9 {
+		return protectedQty, nil
+	}
+	if coverage, ok := at.trader.(FutureFillProtection); ok && coverage.ProtectionCoversFutureFills() && protectedQty > 0 {
+		at.persistProtection(orderID, symbol, positionSide, "STOP_LOSS", executedQty, stopLoss, "ACTIVE", 0, nil)
+		at.persistProtection(orderID, symbol, positionSide, "TAKE_PROFIT", executedQty, takeProfit, "ACTIVE", 0, nil)
+		at.updateProtectionStatus(orderID, "PROTECTED")
+		at.updateOrderProtection(orderID, executedQty, "PROTECTED")
+		return executedQty, nil
+	}
+	delta := executedQty - protectedQty
+	if err := at.protectPositionIncrement(symbol, positionSide, delta, executedQty, stopLoss, takeProfit, orderID); err != nil {
+		return protectedQty, err
+	}
+	return executedQty, nil
+}
+
 func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{}, symbol, action, positionSide string, quantity, fallbackPrice float64, leverage int, stopLoss, takeProfit float64) {
+	at.monitorPendingEntryOrderState(orderResult, symbol, action, positionSide, quantity, fallbackPrice, leverage, stopLoss, takeProfit, 0)
+}
+
+func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]interface{}, symbol, action, positionSide string, quantity, fallbackPrice float64, leverage int, stopLoss, takeProfit, initialProtectedQty float64) {
 	orderID := getOrderIDString(orderResult)
 	if orderID == "" || orderID == "0" {
 		return
 	}
-	at.persistOrderState(orderID, symbol, action, quantity, 0, 0, 0, OrderStateSubmitted, nil)
+	initialQty := numberValue(orderResult["executedQty"])
+	initialPrice := numberValue(orderResult["avgPrice"])
+	initialFee := numberValue(orderResult["commission"])
+	initialState := normalizeOrderState(fmt.Sprint(orderResult["status"]))
+	at.persistEntryOrderState(orderID, symbol, action, quantity, initialQty, initialPrice, initialFee, initialState, leverage, stopLoss, takeProfit, initialProtectedQty, "UNPROTECTED", nil)
 	at.lifecycleMutex.Lock()
 	stopCh := at.stopMonitorCh
 	at.lifecycleMutex.Unlock()
@@ -2180,14 +2264,31 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 	go func() {
 		defer at.monitorWg.Done()
 		logger.Infof("  ⏳ Monitoring pending limit order %s for %s %s", orderID, symbol, action)
-		ticker := time.NewTicker(15 * time.Second)
+		ticker := time.NewTicker(2 * time.Second)
 		defer ticker.Stop()
 		timeout := time.NewTimer(30 * time.Minute)
 		defer timeout.Stop()
 
-		partialQty := numberValue(orderResult["executedQty"])
-		partialPrice := numberValue(orderResult["avgPrice"])
-		partialFee := numberValue(orderResult["commission"])
+		partialQty := initialQty
+		partialPrice := initialPrice
+		partialFee := initialFee
+		protectedQty := initialProtectedQty
+		processFill := func(state OrderState, executedQty, avgPrice, fee float64) bool {
+			if executedQty <= protectedQty+1e-9 {
+				return true
+			}
+			var err error
+			protectedQty, err = at.projectAndProtectEntryFill(orderID, symbol, action, positionSide, quantity, executedQty, avgPrice, fee, leverage, stopLoss, takeProfit, protectedQty, state)
+			if err != nil {
+				logger.Errorf("[%s] entry order %s incremental protection failed: %v", at.name, orderID, err)
+				at.cancelPendingOrder(symbol, orderID)
+				return false
+			}
+			return true
+		}
+		if partialQty > 0 && !processFill(initialState, partialQty, partialPrice, partialFee) {
+			return
+		}
 		finalizePending := func(reason string) bool {
 			at.cancelPendingOrder(symbol, orderID)
 			status, err := at.trader.GetOrderStatus(symbol, orderID)
@@ -2201,18 +2302,16 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 				partialPrice = numberValue(status["avgPrice"])
 				partialFee = numberValue(status["commission"])
 			}
-			at.persistOrderState(orderID, symbol, action, quantity, partialQty, partialPrice, partialFee, state, nil)
+			protectionState := "UNPROTECTED"
+			if partialQty > 0 && partialQty <= protectedQty+1e-9 {
+				protectionState = "PROTECTED"
+			}
+			at.persistEntryOrderState(orderID, symbol, action, quantity, partialQty, partialPrice, partialFee, state, leverage, stopLoss, takeProfit, protectedQty, protectionState, nil)
 			if state != OrderStateFilled && state != OrderStateCanceled && state != OrderStateRejected {
 				logger.Warnf("[%s] %s order %s remains %s after cancel request; monitoring continues", at.name, reason, orderID, state)
 				return false
 			}
-			if partialQty > 0 && partialPrice > 0 {
-				at.recordPositionChange(orderID, symbol, positionSide, action, partialQty, partialPrice, leverage, 0, partialFee)
-				if err := at.protectOpenedPosition(symbol, positionSide, partialQty, stopLoss, takeProfit, orderID); err != nil {
-					logger.Errorf("[%s] %s partial entry %s protection failed: %v", at.name, reason, orderID, err)
-				}
-			}
-			return true
+			return processFill(state, partialQty, partialPrice, partialFee)
 		}
 		for {
 			select {
@@ -2241,7 +2340,14 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 				if executedQty > partialQty {
 					partialQty, partialPrice, partialFee = executedQty, avgPrice, fee
 				}
-				at.persistOrderState(orderID, symbol, action, quantity, executedQty, avgPrice, fee, state, nil)
+				protectionState := "UNPROTECTED"
+				if executedQty > 0 && executedQty <= protectedQty+1e-9 {
+					protectionState = "PROTECTED"
+				}
+				at.persistEntryOrderState(orderID, symbol, action, quantity, executedQty, avgPrice, fee, state, leverage, stopLoss, takeProfit, protectedQty, protectionState, nil)
+				if executedQty > protectedQty+1e-9 && !processFill(state, executedQty, avgPrice, fee) {
+					return
+				}
 				switch state {
 				case OrderStateFilled:
 					if avgPrice <= 0 || executedQty <= 0 {
@@ -2249,26 +2355,11 @@ func (at *AutoTrader) monitorPendingEntryOrder(orderResult map[string]interface{
 						return
 					}
 
-					at.recordPositionChange(orderID, symbol, positionSide, action, executedQty, avgPrice, leverage, 0, fee)
-					if err := at.protectOpenedPosition(symbol, positionSide, executedQty, stopLoss, takeProfit, orderID); err != nil {
-						logger.Errorf("[%s] pending entry order %s protection failed: %v", at.name, orderID, err)
-						return
-					}
 					logger.Infof("  ✅ Pending limit order filled and protected: %s %s order=%s", symbol, positionSide, orderID)
 					return
 				case OrderStatePartial:
 					logger.Warnf("  Partial fill detected for pending order %s: executedQty=%.8f", orderID, numberValue(status["executedQty"]))
 				case OrderStateCanceled, OrderStateRejected:
-					if executed := executedQty; executed > 0 {
-						if avgPrice > 0 {
-							at.recordPositionChange(orderID, symbol, positionSide, action, executed, avgPrice, leverage, 0, fee)
-						} else {
-							logger.Errorf("[%s] terminal partial fill %s has no average price; position projection deferred", at.name, orderID)
-						}
-						if err := at.protectOpenedPosition(symbol, positionSide, executed, stopLoss, takeProfit, orderID); err != nil {
-							logger.Errorf("[%s] terminal partial fill %s protection failed: %v", at.name, orderID, err)
-						}
-					}
 					logger.Infof("  ⚠️ Pending limit order %s ended with status %s", orderID, statusStr)
 					return
 				}
@@ -2390,9 +2481,10 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 			EntryOrderID: orderID,
 			EntryTime:    time.Now(),
 			Leverage:     leverage,
+			Fee:          fee,
 			Status:       "OPEN",
 		}
-		if err := at.store.Position().Create(pos); err != nil {
+		if err := at.store.Position().UpsertEntryFill(pos); err != nil {
 			logger.Infof("  ⚠️ Failed to record position: %v", err)
 		} else {
 			logger.Infof("  📊 Position recorded [%s] %s %s @ %.4f", at.id[:8], symbol, side, price)
@@ -2452,6 +2544,75 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 // Risk Control Helpers
 // ============================================================================
 
+func (at *AutoTrader) buildBackendEntryPlan(d *decision.Decision, entryPrice float64, positions []map[string]interface{}, balance map[string]interface{}, data *market.Data) (decision.EntryPlan, error) {
+	equity, ok := accountNumber(balance, "total_equity", "totalEquity", "totalEq", "accountEquity")
+	if !ok {
+		wallet, walletOK := accountNumber(balance, "totalWalletBalance", "wallet_balance", "walletBalance")
+		unrealized, _ := accountNumber(balance, "totalUnrealizedProfit", "unrealized_profit", "unrealized_pnl")
+		if walletOK {
+			equity = wallet + unrealized
+		}
+	}
+	available, ok := accountNumber(balance, "availableBalance", "available_balance", "available", "availBal")
+	if !ok {
+		return decision.EntryPlan{}, fmt.Errorf("failed to determine available balance from exchange response")
+	}
+	if equity <= 0 {
+		return decision.EntryPlan{}, fmt.Errorf("failed to determine positive account equity from exchange response")
+	}
+
+	maxLeverage := 1
+	minPositionSize := 0.0
+	maxPositionSize := 0.0
+	remainingNotional := math.Inf(1)
+	if at.config.StrategyConfig != nil {
+		risk := at.config.StrategyConfig.RiskControl
+		maxLeverage = risk.AltcoinMaxLeverage
+		if isBTCETHSymbol(d.Symbol) {
+			maxLeverage = risk.BTCETHMaxLeverage
+		}
+		minPositionSize = risk.MinPositionSize
+		maxPositionSize = risk.MaxPositionSize
+		if risk.MaxTotalPositionSize > 0 {
+			remainingNotional = math.Max(risk.MaxTotalPositionSize-totalPositionNotional(positions), 0)
+		}
+	}
+	atr, latestVolume := decision.ConservativeATRAndVolume(data)
+	pendingEntries := 0
+	if at.store != nil {
+		orders, err := at.store.Execution().ListActiveOrders(at.id, at.exchangeID)
+		if err != nil {
+			return decision.EntryPlan{}, fmt.Errorf("cannot verify pending-entry risk: %w", err)
+		}
+		for _, order := range orders {
+			if order.Action == "open_long" || order.Action == "open_short" {
+				pendingEntries++
+			}
+		}
+	}
+	return decision.CalculateEntryPlan(decision.EntrySizingInput{
+		Action:                d.Action,
+		Equity:                equity,
+		AvailableBalance:      available,
+		EntryPrice:            entryPrice,
+		StopLoss:              d.StopLoss,
+		ATR:                   atr,
+		LatestBaseVolume:      latestVolume,
+		ExistingPositionCount: len(positions) + pendingEntries,
+		MaxLeverage:           maxLeverage,
+		MinPositionSize:       minPositionSize,
+		MaxPositionSize:       maxPositionSize,
+		RemainingNotional:     remainingNotional,
+	})
+}
+
+// conservativeATRAndVolume uses the largest available ATR and the smallest
+// positive recent volume. K-line volume is only a liquidity proxy; the common
+// trader interface currently exposes no portable order-book depth snapshot.
+func conservativeATRAndVolume(data *market.Data) (float64, float64) {
+	return decision.ConservativeATRAndVolume(data)
+}
+
 // evaluateAccountRisk updates the mark-to-market account state once per cycle.
 // It deliberately blocks only future entries; close orders remain available.
 func (at *AutoTrader) evaluateAccountRisk(ctx *decision.Context) bool {
@@ -2477,6 +2638,7 @@ func (at *AutoTrader) evaluateAccountRisk(ctx *decision.Context) bool {
 		at.triggerRiskLocked("daily loss limit")
 	}
 	if at.equityHighWater > 0 && limits.maxDrawdown > 0 && (at.equityHighWater-ctx.Account.TotalEquity)/at.equityHighWater*100 >= limits.maxDrawdown {
+		at.manualReviewRequired = true
 		at.triggerRiskLocked("equity drawdown limit")
 	}
 	if limits.maxMarginUsage > 0 && ctx.Account.MarginUsedPct >= limits.maxMarginUsage {
@@ -2488,7 +2650,16 @@ func (at *AutoTrader) evaluateAccountRisk(ctx *decision.Context) bool {
 			break
 		}
 	}
-	return time.Now().Before(at.stopUntil)
+	return at.manualReviewRequired || time.Now().Before(at.stopUntil)
+}
+
+// ClearManualReviewHalt is intentionally explicit: an account drawdown halt
+// never expires on a timer and must be acknowledged by an operator.
+func (at *AutoTrader) ClearManualReviewHalt() {
+	at.riskMutex.Lock()
+	at.manualReviewRequired = false
+	at.equityHighWater = 0
+	at.riskMutex.Unlock()
 }
 
 type accountRiskLimits struct {
@@ -2498,10 +2669,21 @@ type accountRiskLimits struct {
 }
 
 func (at *AutoTrader) accountRiskLimits() accountRiskLimits {
-	limits := accountRiskLimits{maxDailyLoss: at.config.MaxDailyLoss, maxDrawdown: at.config.MaxDrawdown, stopFor: at.config.StopTradingTime}
+	limits := accountRiskLimits{maxDailyLoss: decision.DailyLossHaltPct, maxDrawdown: decision.AccountDrawdownHaltPct, stopFor: at.config.StopTradingTime}
+	if at.config.MaxDailyLoss > 0 && at.config.MaxDailyLoss < limits.maxDailyLoss {
+		limits.maxDailyLoss = at.config.MaxDailyLoss
+	}
+	if at.config.MaxDrawdown > 0 && at.config.MaxDrawdown < limits.maxDrawdown {
+		limits.maxDrawdown = at.config.MaxDrawdown
+	}
 	if at.config.StrategyConfig != nil {
 		r := at.config.StrategyConfig.RiskControl
-		limits.maxDailyLoss, limits.maxDrawdown = r.MaxDailyLossPct, r.MaxDrawdownPct
+		if r.MaxDailyLossPct > 0 && r.MaxDailyLossPct < limits.maxDailyLoss {
+			limits.maxDailyLoss = r.MaxDailyLossPct
+		}
+		if r.MaxDrawdownPct > 0 && r.MaxDrawdownPct < limits.maxDrawdown {
+			limits.maxDrawdown = r.MaxDrawdownPct
+		}
 		limits.maxMarginUsage, limits.minLiquidationDistance = r.MaxMarginUsagePct, r.MinLiquidationDistancePct
 		limits.maxFailures, limits.maxMarketMove = r.MaxConsecutiveFailures, r.MaxMarketMovePct
 		limits.stopFor = time.Duration(r.StopTradingMinutes) * time.Minute
@@ -2572,7 +2754,11 @@ func (at *AutoTrader) enforceAccountEntryRisk(positions []map[string]interface{}
 	}
 	at.riskMutex.Lock()
 	paused := time.Now().Before(at.stopUntil)
+	manualReviewRequired := at.manualReviewRequired
 	at.riskMutex.Unlock()
+	if manualReviewRequired {
+		return fmt.Errorf("❌ [RISK CONTROL] account drawdown halt requires manual review")
+	}
 	if paused {
 		return fmt.Errorf("❌ [RISK CONTROL] new entries are paused")
 	}
@@ -2630,21 +2816,11 @@ func (at *AutoTrader) enforcePositionSizeLimits(positionSizeUSD float64, positio
 	}
 
 	riskControl := at.config.StrategyConfig.RiskControl
-	if riskControl.MaxPositionSize > 0 && positionSizeUSD > riskControl.MaxPositionSize {
-		logger.Infof("  ⚠️ [RISK CONTROL] Opening order %.2f USDT exceeds per-order limit %.2f USDT, capping",
-			positionSizeUSD, riskControl.MaxPositionSize)
-		positionSizeUSD = riskControl.MaxPositionSize
+	capped := decision.CapPositionSize(positionSizeUSD, totalPositionNotional(positions), riskControl)
+	if capped < positionSizeUSD {
+		logger.Infof("  ⚠️ [RISK CONTROL] Opening order %.2f USDT capped to %.2f USDT", positionSizeUSD, capped)
 	}
-
-	if riskControl.MaxTotalPositionSize > 0 {
-		remaining := riskControl.MaxTotalPositionSize - totalPositionNotional(positions)
-		if remaining < positionSizeUSD {
-			logger.Infof("  ⚠️ [RISK CONTROL] Opening order %.2f USDT exceeds remaining total-position limit %.2f USDT, capping",
-				positionSizeUSD, math.Max(remaining, 0))
-			positionSizeUSD = math.Max(remaining, 0)
-		}
-	}
-	return positionSizeUSD
+	return capped
 }
 
 func totalPositionNotional(positions []map[string]interface{}) float64 {
@@ -2684,13 +2860,8 @@ func (at *AutoTrader) enforceMinPositionSize(positionSizeUSD float64) error {
 		return nil
 	}
 
-	minSize := at.config.StrategyConfig.RiskControl.MinPositionSize
-	if minSize <= 0 {
-		minSize = 12 // Default: 12 USDT
-	}
-
-	if positionSizeUSD < minSize {
-		return fmt.Errorf("❌ [RISK CONTROL] Position %.2f USDT below minimum (%.2f USDT)", positionSizeUSD, minSize)
+	if err := decision.ValidateMinimumPositionSize(positionSizeUSD, at.config.StrategyConfig.RiskControl); err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %w", err)
 	}
 	return nil
 }
@@ -2701,13 +2872,8 @@ func (at *AutoTrader) enforceMaxPositions(currentPositionCount int) error {
 		return nil
 	}
 
-	maxPositions := at.config.StrategyConfig.RiskControl.MaxPositions
-	if maxPositions <= 0 {
-		maxPositions = 3 // Default: 3 positions
-	}
-
-	if currentPositionCount >= maxPositions {
-		return fmt.Errorf("❌ [RISK CONTROL] Already at max positions (%d/%d)", currentPositionCount, maxPositions)
+	if err := decision.ValidatePositionCount(currentPositionCount, at.config.StrategyConfig.RiskControl); err != nil {
+		return fmt.Errorf("❌ [RISK CONTROL] %w", err)
 	}
 	return nil
 }

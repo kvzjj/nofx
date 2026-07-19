@@ -16,7 +16,8 @@ func TestExecutionStorePersistsLifecycleAndProtections(t *testing.T) {
 	order := TradeOrder{
 		TraderID: "trader-1", ExchangeID: "account-1", ExchangeType: "binance",
 		OrderID: "42", Symbol: "BTCUSDT", PositionSide: "LONG", Action: "open_long",
-		RequestedQty: 1, Status: "SUBMITTED",
+		RequestedQty: 1, Status: "SUBMITTED", Leverage: 5, StopLoss: 49000,
+		TakeProfit: 52000, ProtectionStatus: "UNPROTECTED",
 	}
 	if err := st.Execution().UpsertOrder(order); err != nil {
 		t.Fatal(err)
@@ -41,6 +42,16 @@ func TestExecutionStorePersistsLifecycleAndProtections(t *testing.T) {
 	if len(activeOrders) != 1 || activeOrders[0].OrderID != "42" || activeOrders[0].ExecutedQty != 0.4 {
 		t.Fatalf("unexpected active orders: %#v", activeOrders)
 	}
+	if activeOrders[0].StopLoss != 49000 || activeOrders[0].TakeProfit != 52000 || activeOrders[0].Leverage != 5 {
+		t.Fatalf("entry protection intent was not persisted: %#v", activeOrders[0])
+	}
+	recoverable, err := st.Execution().ListRecoverableEntryOrders("trader-1", "account-1")
+	if err != nil || len(recoverable) != 1 {
+		t.Fatalf("expected partial order recovery, orders=%#v err=%v", recoverable, err)
+	}
+	if err := st.Execution().UpdateOrderProtection("trader-1", "account-1", "42", 0.4, "PROTECTED"); err != nil {
+		t.Fatal(err)
+	}
 	if err := st.Execution().RecordFill(order); err != nil {
 		t.Fatal(err)
 	}
@@ -64,6 +75,19 @@ func TestExecutionStorePersistsLifecycleAndProtections(t *testing.T) {
 	activeOrders, err = st.Execution().ListActiveOrders("trader-1", "account-1")
 	if err != nil || len(activeOrders) != 0 {
 		t.Fatalf("expected no reconcilable terminal orders, orders=%#v err=%v", activeOrders, err)
+	}
+	unprotected := TradeOrder{
+		TraderID: "trader-1", ExchangeID: "account-1", ExchangeType: "binance",
+		OrderID: "43", Symbol: "ETHUSDT", PositionSide: "SHORT", Action: "open_short",
+		RequestedQty: 0.2, ExecutedQty: 0.2, AvgPrice: 3000, Status: "FILLED",
+		Leverage: 3, StopLoss: 3100, TakeProfit: 2800, ProtectionStatus: "UNPROTECTED",
+	}
+	if err := st.Execution().UpsertOrder(unprotected); err != nil {
+		t.Fatal(err)
+	}
+	recoverable, err = st.Execution().ListRecoverableEntryOrders("trader-1", "account-1")
+	if err != nil || len(recoverable) != 1 || recoverable[0].OrderID != "43" {
+		t.Fatalf("expected terminal unprotected order recovery, orders=%#v err=%v", recoverable, err)
 	}
 	var fillCount int
 	if err := st.db.QueryRow(`SELECT COUNT(*) FROM trade_fills WHERE order_id = '42'`).Scan(&fillCount); err != nil {

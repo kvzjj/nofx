@@ -1,6 +1,9 @@
 package backtest
 
-import "time"
+import (
+	"nofx/decision"
+	"time"
+)
 
 // RunState represents the current state of a backtest run.
 type RunState string
@@ -25,6 +28,15 @@ type PositionSnapshot struct {
 	LiquidationPrice float64 `json:"liquidation_price"`
 	MarginUsed       float64 `json:"margin_used"`
 	OpenTime         int64   `json:"open_time"`
+	StopLoss         float64 `json:"stop_loss,omitempty"`
+	TakeProfit       float64 `json:"take_profit,omitempty"`
+	MaintenanceRate  float64 `json:"maintenance_rate,omitempty"`
+}
+
+type PendingOrder struct {
+	Decision        decision.Decision `json:"decision"`
+	SignalTimestamp int64             `json:"signal_ts"`
+	Cycle           int               `json:"cycle"`
 }
 
 // BacktestState represents the real-time state during execution (in-memory state).
@@ -44,6 +56,8 @@ type BacktestState struct {
 	LastUpdate      time.Time
 	Liquidated      bool
 	LiquidationNote string
+	PendingOrders   []PendingOrder
+	NextFundingTS   int64
 }
 
 // EquityPoint represents a single point on the equity curve.
@@ -120,6 +134,8 @@ type Checkpoint struct {
 	AICacheRef      string                    `json:"ai_cache_ref,omitempty"`
 	Liquidated      bool                      `json:"liquidated"`
 	LiquidationNote string                    `json:"liquidation_note,omitempty"`
+	PendingOrders   []PendingOrder            `json:"pending_orders,omitempty"`
+	NextFundingTS   int64                     `json:"next_funding_ts,omitempty"`
 }
 
 // RunMetadata records the summary required for run.json.

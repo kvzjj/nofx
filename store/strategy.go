@@ -592,10 +592,10 @@ func (config *StrategyConfig) ApplyDefaults() {
 		config.RiskControl.MinConfidence = 75
 	}
 	if config.RiskControl.MaxDailyLossPct <= 0 {
-		config.RiskControl.MaxDailyLossPct = 5
+		config.RiskControl.MaxDailyLossPct = 1.5
 	}
 	if config.RiskControl.MaxDrawdownPct <= 0 {
-		config.RiskControl.MaxDrawdownPct = 10
+		config.RiskControl.MaxDrawdownPct = 8
 	}
 	if config.RiskControl.MaxMarginUsagePct <= 0 {
 		config.RiskControl.MaxMarginUsagePct = 80

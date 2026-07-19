@@ -15,6 +15,9 @@ func TestApplyStrategyDefaultsPositionLimits(t *testing.T) {
 	if config.RiskControl.MaxTotalPositionSize != 3000 {
 		t.Fatalf("MaxTotalPositionSize = %v, want 3000", config.RiskControl.MaxTotalPositionSize)
 	}
+	if config.RiskControl.MaxDailyLossPct != 1.5 || config.RiskControl.MaxDrawdownPct != 8 {
+		t.Fatalf("account loss defaults = %.2f/%.2f, want 1.5/8", config.RiskControl.MaxDailyLossPct, config.RiskControl.MaxDrawdownPct)
+	}
 }
 
 func TestApplyStrategyDefaultsPreservesPositionLimits(t *testing.T) {

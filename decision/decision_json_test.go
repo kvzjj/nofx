@@ -18,8 +18,11 @@ func TestExtractDecisionsAcceptsCommonModelFormattingDrift(t *testing.T) {
 		t.Fatalf("got %d decisions, want 1", len(decisions))
 	}
 	d := decisions[0]
-	if d.Symbol != "ETHUSDT" || d.Action != "open_short" || d.Leverage != 5 || d.PositionSizeUSD != 1000 || d.Confidence != 85 {
+	if d.Symbol != "ETHUSDT" || d.Action != "open_short" || d.StopLoss != 4100 || d.TakeProfit != 3800 {
 		t.Fatalf("unexpected normalized decision: %#v", d)
+	}
+	if d.Leverage != 0 || d.PositionSizeUSD != 0 || d.Confidence != 0 || d.RiskUSD != 0 {
+		t.Fatalf("AI-owned sizing fields were not ignored: %#v", d)
 	}
 }
 
@@ -34,10 +37,11 @@ func TestExtractDecisionsAcceptsSingleObjectAndTextBeforeJSON(t *testing.T) {
 	}
 }
 
-func TestExtractDecisionsRejectsNumericExpression(t *testing.T) {
-	response := `<decision>[{"symbol":"BTCUSDT","action":"open_long","leverage":5,"position_size_usd":"100 * 2"}]</decision>`
-	if _, err := extractDecisions(response); err == nil {
-		t.Fatal("extractDecisions() error = nil, want malformed numeric expression error")
+func TestExtractDecisionsIgnoresLegacySizingExpression(t *testing.T) {
+	response := `<decision>[{"symbol":"BTCUSDT","action":"open_long","position_size_usd":"100 * 2","stop_loss":90,"take_profit":130}]</decision>`
+	decisions, err := extractDecisions(response)
+	if err != nil || len(decisions) != 1 || decisions[0].PositionSizeUSD != 0 {
+		t.Fatalf("legacy sizing field should be ignored, decisions=%#v err=%v", decisions, err)
 	}
 }
 
@@ -50,7 +54,7 @@ func TestExtractDecisionsSalvagesValidCloseFromMalformedBatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("extractDecisions() error = %v", err)
 	}
-	if len(decisions) != 1 || decisions[0].Symbol != "BTCUSDT" || decisions[0].Action != "close_long" {
+	if len(decisions) != 2 || decisions[0].PositionSizeUSD != 0 || decisions[1].Symbol != "BTCUSDT" || decisions[1].Action != "close_long" {
 		t.Fatalf("unexpected recovered decisions: %#v", decisions)
 	}
 }

@@ -418,3 +418,42 @@ func TestGetBrOrderID(t *testing.T) {
 		ids[id] = true
 	}
 }
+
+func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
+	requests := make(chan map[string]string, 2)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := r.ParseForm(); err != nil {
+			t.Errorf("parse form: %v", err)
+		}
+		requests <- map[string]string{
+			"type":          r.FormValue("type"),
+			"quantity":      r.FormValue("quantity"),
+			"closePosition": r.FormValue("closePosition"),
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"orderId":123,"status":"NEW","symbol":"BTCUSDT"}`))
+	}))
+	defer server.Close()
+
+	client := futures.NewClient("key", "secret")
+	client.BaseURL = server.URL
+	client.HTTPClient = server.Client()
+	trader := &FuturesTrader{client: client}
+
+	if err := trader.SetStopLoss("BTCUSDT", "LONG", 0.01, 49000); err != nil {
+		t.Fatal(err)
+	}
+	if err := trader.SetTakeProfit("BTCUSDT", "LONG", 0.01, 51000); err != nil {
+		t.Fatal(err)
+	}
+
+	for i := 0; i < 2; i++ {
+		request := <-requests
+		if request["closePosition"] != "true" {
+			t.Fatalf("expected closePosition=true, got %#v", request)
+		}
+		if request["quantity"] != "" {
+			t.Fatalf("Binance forbids quantity with closePosition=true, got %#v", request)
+		}
+	}
+}

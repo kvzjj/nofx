@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"math"
 	"nofx/logger"
 	"os"
 	"path/filepath"
@@ -86,6 +87,7 @@ func NewRunner(cfg BacktestConfig, mcpClient mcp.AIClient) (*Runner, error) {
 
 	dLogDir := decisionLogDir(cfg.RunID)
 	account := NewBacktestAccount(cfg.InitialBalance, cfg.FeeBps, cfg.SlippageBps)
+	account.SetMarginTiers(cfg.MarginTiers)
 
 	createdAt := time.Now().UTC()
 	state := &BacktestState{
@@ -281,13 +283,27 @@ func (r *Runner) stepOnce() error {
 		priceMap[symbol] = data.CurrentPrice
 	}
 
+	// Event order: orders signalled on the prior close execute at this bar's
+	// open, then intrabar protection/liquidation is evaluated, and only after
+	// the close do we generate the next signal.
+	tradeEvents, err := r.executePendingAtOpen(ts, priceMap, state.DecisionCycle)
+	if err != nil {
+		return err
+	}
+	fundingEvents := r.applyFunding(ts, state.DecisionCycle)
+	tradeEvents = append(tradeEvents, fundingEvents...)
+	protectionEvents, protectionNote, err := r.checkBarExits(ts, state.DecisionCycle)
+	if err != nil {
+		return err
+	}
+	tradeEvents = append(tradeEvents, protectionEvents...)
+
 	callCount := state.DecisionCycle + 1
 	shouldDecide := r.shouldTriggerDecision(state.BarIndex)
 
 	var (
 		record          *store.DecisionRecord
 		decisionActions []store.DecisionAction
-		tradeEvents     = make([]TradeEvent, 0)
 		execLog         []string
 		hadError        bool
 	)
@@ -400,6 +416,9 @@ func (r *Runner) stepOnce() error {
 		if record != nil {
 			execLog = append(execLog, fmt.Sprintf("⚠️ Forced liquidation: %s", liquidationNote))
 		}
+	}
+	if protectionNote != "" {
+		execLog = append(execLog, protectionNote)
 	}
 
 	if record != nil {
@@ -563,6 +582,65 @@ func (r *Runner) invokeAIWithRetry(ctx *decision.Context) (*decision.FullDecisio
 }
 
 func (r *Runner) executeDecision(dec decision.Decision, priceMap map[string]float64, ts int64, cycle int) (store.DecisionAction, []TradeEvent, string, error) {
+	action := store.DecisionAction{Action: dec.Action, Symbol: dec.Symbol, Leverage: r.resolveLeverage(dec.Leverage, dec.Symbol), Timestamp: time.UnixMilli(ts).UTC()}
+	if dec.Action == "hold" || dec.Action == "wait" {
+		return action, nil, fmt.Sprintf("hold position: %s", dec.Action), nil
+	}
+	if dec.Action != "open_long" && dec.Action != "open_short" && dec.Action != "close_long" && dec.Action != "close_short" {
+		return action, nil, "", fmt.Errorf("unsupported action %s", dec.Action)
+	}
+	if dec.Action == "open_long" || dec.Action == "open_short" {
+		if err := r.prepareEntryDecision(&dec, priceMap, ts); err != nil {
+			return action, nil, "", err
+		}
+		action.Leverage = dec.Leverage
+	}
+	// Signals are created at the close and become executable events on the next
+	// bar. This prevents future prices from being booked at the signal time.
+	r.stateMu.Lock()
+	r.state.PendingOrders = append(r.state.PendingOrders, PendingOrder{Decision: dec, SignalTimestamp: ts, Cycle: cycle})
+	r.stateMu.Unlock()
+	return action, nil, "queued for next bar open", nil
+}
+
+func (r *Runner) prepareEntryDecision(dec *decision.Decision, priceMap map[string]float64, ts int64) error {
+	marketData, _, err := r.feed.BuildMarketData(ts)
+	if err != nil {
+		return fmt.Errorf("build sizing inputs: %w", err)
+	}
+	data := marketData[dec.Symbol]
+	atr, latestVolume := decision.ConservativeATRAndVolume(data)
+	equity, _, _ := r.account.TotalEquity(priceMap)
+	currentNotional := 0.0
+	for _, pos := range r.account.Positions() {
+		currentNotional += pos.Quantity * pos.EntryPrice
+	}
+	risk := r.strategyEngine.GetRiskControlConfig()
+	remaining := math.Inf(1)
+	if risk.MaxTotalPositionSize > 0 {
+		remaining = math.Max(risk.MaxTotalPositionSize-currentNotional, 0)
+	}
+	r.stateMu.RLock()
+	pendingEntries := 0
+	for _, order := range r.state.PendingOrders {
+		if order.Decision.Action == "open_long" || order.Decision.Action == "open_short" {
+			pendingEntries++
+		}
+	}
+	r.stateMu.RUnlock()
+	plan, err := decision.CalculateEntryPlan(decision.EntrySizingInput{
+		Action: dec.Action, Equity: equity, AvailableBalance: r.account.Cash(), EntryPrice: priceMap[dec.Symbol], StopLoss: dec.StopLoss,
+		ATR: atr, LatestBaseVolume: latestVolume, ExistingPositionCount: len(r.account.Positions()) + pendingEntries,
+		MaxLeverage: r.resolveLeverage(0, dec.Symbol), MinPositionSize: risk.MinPositionSize, MaxPositionSize: risk.MaxPositionSize, RemainingNotional: remaining,
+	})
+	if err != nil {
+		return fmt.Errorf("backend sizing: %w", err)
+	}
+	dec.PositionSizeUSD, dec.Leverage, dec.RiskUSD = plan.PositionSizeUSD, plan.Leverage, plan.ActualRiskUSD
+	return nil
+}
+
+func (r *Runner) executeDecisionImmediate(dec decision.Decision, priceMap map[string]float64, ts int64, cycle int) (store.DecisionAction, []TradeEvent, string, error) {
 	symbol := dec.Symbol
 	usedLeverage := r.resolveLeverage(dec.Leverage, symbol)
 	actionRecord := store.DecisionAction{
@@ -577,6 +655,15 @@ func (r *Runner) executeDecision(dec decision.Decision, priceMap map[string]floa
 		return actionRecord, nil, "", fmt.Errorf("price unavailable for %s", symbol)
 	}
 	fillPrice := r.executionPrice(symbol, basePrice, ts)
+	if dec.Action == "open_long" || dec.Action == "open_short" {
+		risk := r.strategyEngine.GetRiskControlConfig()
+		if err := decision.ValidatePositionCount(len(r.account.Positions()), risk); err != nil {
+			return actionRecord, nil, "", err
+		}
+		if err := decision.ValidateMinimumPositionSize(dec.PositionSizeUSD, risk); err != nil {
+			return actionRecord, nil, "", err
+		}
+	}
 
 	switch dec.Action {
 	case "open_long":
@@ -584,7 +671,11 @@ func (r *Runner) executeDecision(dec decision.Decision, priceMap map[string]floa
 		if qty <= 0 {
 			return actionRecord, nil, "", fmt.Errorf("invalid qty")
 		}
-		pos, fee, execPrice, err := r.account.Open(symbol, "long", qty, usedLeverage, fillPrice, ts)
+		if err := decision.ValidateEntryRisk(&dec, fillPrice, qty, r.strategyEngine.GetRiskControlConfig().MinRiskRewardRatio); err != nil {
+			return actionRecord, nil, "", err
+		}
+		cost := r.executionCost(symbol, ts, fillPrice*qty)
+		pos, fee, execPrice, err := r.account.OpenWithCost(symbol, "long", qty, usedLeverage, fillPrice, ts, cost, dec.StopLoss, dec.TakeProfit)
 		if err != nil {
 			return actionRecord, nil, "", err
 		}
@@ -613,7 +704,11 @@ func (r *Runner) executeDecision(dec decision.Decision, priceMap map[string]floa
 		if qty <= 0 {
 			return actionRecord, nil, "", fmt.Errorf("invalid qty")
 		}
-		pos, fee, execPrice, err := r.account.Open(symbol, "short", qty, usedLeverage, fillPrice, ts)
+		if err := decision.ValidateEntryRisk(&dec, fillPrice, qty, r.strategyEngine.GetRiskControlConfig().MinRiskRewardRatio); err != nil {
+			return actionRecord, nil, "", err
+		}
+		cost := r.executionCost(symbol, ts, fillPrice*qty)
+		pos, fee, execPrice, err := r.account.OpenWithCost(symbol, "short", qty, usedLeverage, fillPrice, ts, cost, dec.StopLoss, dec.TakeProfit)
 		if err != nil {
 			return actionRecord, nil, "", err
 		}
@@ -643,7 +738,8 @@ func (r *Runner) executeDecision(dec decision.Decision, priceMap map[string]floa
 			return actionRecord, nil, "", fmt.Errorf("invalid close qty")
 		}
 		posLev := r.account.positionLeverage(symbol, "long")
-		realized, fee, execPrice, err := r.account.Close(symbol, "long", qty, fillPrice)
+		cost := r.executionCost(symbol, ts, fillPrice*qty)
+		realized, fee, execPrice, err := r.account.CloseWithCost(symbol, "long", qty, fillPrice, cost)
 		if err != nil {
 			return actionRecord, nil, "", err
 		}
@@ -673,7 +769,8 @@ func (r *Runner) executeDecision(dec decision.Decision, priceMap map[string]floa
 			return actionRecord, nil, "", fmt.Errorf("invalid close qty")
 		}
 		posLev := r.account.positionLeverage(symbol, "short")
-		realized, fee, execPrice, err := r.account.Close(symbol, "short", qty, fillPrice)
+		cost := r.executionCost(symbol, ts, fillPrice*qty)
+		realized, fee, execPrice, err := r.account.CloseWithCost(symbol, "short", qty, fillPrice, cost)
 		if err != nil {
 			return actionRecord, nil, "", err
 		}
@@ -704,6 +801,165 @@ func (r *Runner) executeDecision(dec decision.Decision, priceMap map[string]floa
 	}
 }
 
+func (r *Runner) executePendingAtOpen(ts int64, closePrices map[string]float64, cycle int) ([]TradeEvent, error) {
+	r.stateMu.Lock()
+	pending := append([]PendingOrder(nil), r.state.PendingOrders...)
+	r.state.PendingOrders = nil
+	r.stateMu.Unlock()
+	if len(pending) == 0 {
+		return nil, nil
+	}
+
+	openPrices := make(map[string]float64, len(closePrices))
+	for symbol, closePrice := range closePrices {
+		openPrices[symbol] = closePrice
+		if bar := r.feed.DecisionBar(symbol, ts); bar != nil && bar.Open > 0 {
+			openPrices[symbol] = bar.Open
+		}
+	}
+	events := make([]TradeEvent, 0, len(pending))
+	for _, order := range pending {
+		_, trades, _, err := r.executeDecisionImmediate(order.Decision, openPrices, ts, order.Cycle)
+		if err != nil {
+			events = append(events, TradeEvent{Timestamp: ts, Symbol: order.Decision.Symbol, Action: "rejected", Cycle: order.Cycle, Note: err.Error()})
+			continue
+		}
+		events = append(events, trades...)
+	}
+	return events, nil
+}
+
+func (r *Runner) executionCost(symbol string, ts int64, notional float64) ExecutionCost {
+	rate := r.cfg.SlippageBps / 10000
+	if bar := r.feed.DecisionBar(symbol, ts); bar != nil {
+		if bar.Open > 0 && r.cfg.VolatilitySlippage > 0 {
+			rate += r.cfg.VolatilitySlippage * (bar.High - bar.Low) / bar.Open
+		}
+		volumeUSD := bar.QuoteVolume
+		if volumeUSD <= 0 {
+			volumeUSD = bar.Volume * bar.Open
+		}
+		if volumeUSD > 0 && r.cfg.ImpactBps > 0 && notional > 0 {
+			rate += r.cfg.ImpactBps / 10000 * math.Sqrt(notional/volumeUSD)
+		}
+	}
+	if rate > 0.05 {
+		rate = 0.05
+	}
+	feeBps := r.cfg.TakerFeeBps
+	if feeBps <= 0 {
+		feeBps = r.cfg.FeeBps
+	}
+	return ExecutionCost{FeeRate: feeBps / 10000, SlippageRate: rate}
+}
+
+func (r *Runner) checkBarExits(ts int64, cycle int) ([]TradeEvent, string, error) {
+	positions := append([]*position(nil), r.account.Positions()...)
+	events := make([]TradeEvent, 0)
+	notes := make([]string, 0)
+	for _, pos := range positions {
+		bar := r.feed.DecisionBar(pos.Symbol, ts)
+		if bar == nil {
+			continue
+		}
+		action, triggerPrice := "", 0.0
+		liquidated := false
+		if pos.Side == "long" {
+			if pos.StopLoss > 0 && bar.Open <= pos.StopLoss {
+				action, triggerPrice = "stop_loss", bar.Open
+			} else if pos.TakeProfit > 0 && bar.Open >= pos.TakeProfit {
+				action, triggerPrice = "take_profit", bar.Open
+			} else {
+				stopHit := pos.StopLoss > 0 && bar.Low <= pos.StopLoss
+				takeHit := pos.TakeProfit > 0 && bar.High >= pos.TakeProfit
+				if stopHit {
+					action, triggerPrice = "stop_loss", pos.StopLoss // conservative when both hit
+				} else if takeHit {
+					action, triggerPrice = "take_profit", pos.TakeProfit
+				} else if pos.LiquidationPrice > 0 && bar.Low <= pos.LiquidationPrice {
+					action, triggerPrice, liquidated = "liquidated", pos.LiquidationPrice, true
+				}
+			}
+		} else {
+			if pos.StopLoss > 0 && bar.Open >= pos.StopLoss {
+				action, triggerPrice = "stop_loss", bar.Open
+			} else if pos.TakeProfit > 0 && bar.Open <= pos.TakeProfit {
+				action, triggerPrice = "take_profit", bar.Open
+			} else {
+				stopHit := pos.StopLoss > 0 && bar.High >= pos.StopLoss
+				takeHit := pos.TakeProfit > 0 && bar.Low <= pos.TakeProfit
+				if stopHit {
+					action, triggerPrice = "stop_loss", pos.StopLoss
+				} else if takeHit {
+					action, triggerPrice = "take_profit", pos.TakeProfit
+				} else if pos.LiquidationPrice > 0 && bar.High >= pos.LiquidationPrice {
+					action, triggerPrice, liquidated = "liquidated", pos.LiquidationPrice, true
+				}
+			}
+		}
+		if action == "" {
+			continue
+		}
+		cost := r.executionCost(pos.Symbol, ts, triggerPrice*pos.Quantity)
+		realized, fee, fill, err := r.account.CloseWithCost(pos.Symbol, pos.Side, pos.Quantity, triggerPrice, cost)
+		if err != nil {
+			return nil, "", err
+		}
+		events = append(events, TradeEvent{Timestamp: ts, Symbol: pos.Symbol, Action: action, Side: pos.Side, Quantity: pos.Quantity, Price: fill, Fee: fee, Slippage: math.Abs(fill - triggerPrice), OrderValue: fill * pos.Quantity, RealizedPnL: realized - fee, Leverage: pos.Leverage, Cycle: cycle, PositionAfter: 0, LiquidationFlag: liquidated, Note: fmt.Sprintf("%s triggered at %.8f", action, triggerPrice)})
+		notes = append(notes, fmt.Sprintf("%s %s %s", pos.Symbol, pos.Side, action))
+		if liquidated {
+			r.stateMu.Lock()
+			r.state.Liquidated = true
+			r.state.LiquidationNote = notes[len(notes)-1]
+			r.stateMu.Unlock()
+		}
+	}
+	return events, strings.Join(notes, "; "), nil
+}
+
+func (r *Runner) applyFunding(ts int64, cycle int) []TradeEvent {
+	interval := int64(time.Duration(r.cfg.FundingIntervalHours) * time.Hour / time.Millisecond)
+	if interval <= 0 || r.cfg.FundingRateBps == 0 {
+		return nil
+	}
+	r.stateMu.Lock()
+	if r.state.NextFundingTS == 0 {
+		start := r.cfg.StartTS * 1000
+		r.state.NextFundingTS = ((start + interval - 1) / interval) * interval
+	}
+	next := r.state.NextFundingTS
+	r.stateMu.Unlock()
+	if next > ts {
+		return nil
+	}
+	marks := make(map[string]float64)
+	for _, pos := range r.account.Positions() {
+		if bar := r.feed.DecisionBar(pos.Symbol, ts); bar != nil {
+			marks[pos.Symbol] = bar.Open
+		}
+	}
+	events := make([]TradeEvent, 0)
+	for next <= ts {
+		for _, pos := range append([]*position(nil), r.account.Positions()...) {
+			mark := marks[pos.Symbol]
+			if mark <= 0 {
+				mark = pos.EntryPrice
+			}
+			payment := mark * pos.Quantity * r.cfg.FundingRateBps / 10000
+			if pos.Side == "short" {
+				payment = -payment
+			}
+			events = append(events, TradeEvent{Timestamp: next, Symbol: pos.Symbol, Action: "funding", Side: pos.Side, Quantity: pos.Quantity, Price: mark, RealizedPnL: -payment, Cycle: cycle, PositionAfter: pos.Quantity, Note: fmt.Sprintf("funding rate %.4f bps", r.cfg.FundingRateBps)})
+		}
+		r.account.ApplyFunding(marks, r.cfg.FundingRateBps/10000)
+		next += interval
+	}
+	r.stateMu.Lock()
+	r.state.NextFundingTS = next
+	r.stateMu.Unlock()
+	return events
+}
+
 func (r *Runner) determineQuantity(dec decision.Decision, price float64) float64 {
 	snapshot := r.snapshotState()
 	equity := snapshot.Equity
@@ -714,6 +970,11 @@ func (r *Runner) determineQuantity(dec decision.Decision, price float64) float64
 	if sizeUSD <= 0 {
 		sizeUSD = 0.05 * equity
 	}
+	currentNotional := 0.0
+	for _, pos := range r.account.Positions() {
+		currentNotional += pos.Quantity * pos.EntryPrice
+	}
+	sizeUSD = decision.CapPositionSize(sizeUSD, currentNotional, r.strategyEngine.GetRiskControlConfig())
 	qty := sizeUSD / price
 	if qty < 0 {
 		qty = 0
@@ -798,22 +1059,9 @@ func (r *Runner) convertPositions(priceMap map[string]float64) []decision.Positi
 }
 
 func (r *Runner) executionPrice(symbol string, markPrice float64, ts int64) float64 {
-	curr, next := r.feed.decisionBarSnapshot(symbol, ts)
-	switch r.cfg.FillPolicy {
-	case FillPolicyNextOpen:
-		if next != nil && next.Open > 0 {
-			return next.Open
-		}
-	case FillPolicyBarVWAP:
-		if curr != nil {
-			if vwap := barVWAP(*curr); vwap > 0 {
-				return vwap
-			}
-		}
-	case FillPolicyMidPrice:
-		if curr != nil && curr.High > 0 && curr.Low > 0 {
-			return (curr.High + curr.Low) / 2
-		}
+	curr, _ := r.feed.decisionBarSnapshot(symbol, ts)
+	if curr != nil && curr.Open > 0 {
+		return curr.Open
 	}
 	return markPrice
 }
@@ -855,6 +1103,9 @@ func (r *Runner) updateState(ts int64, equity, unrealized, marginUsed float64, p
 			LiquidationPrice: pos.LiquidationPrice,
 			MarginUsed:       pos.Margin,
 			OpenTime:         pos.OpenTime,
+			StopLoss:         pos.StopLoss,
+			TakeProfit:       pos.TakeProfit,
+			MaintenanceRate:  pos.MaintenanceRate,
 		}
 	}
 
@@ -1124,6 +1375,7 @@ func (r *Runner) snapshotState() BacktestState {
 	for k, v := range r.state.Positions {
 		copyState.Positions[k] = v
 	}
+	copyState.PendingOrders = append([]PendingOrder(nil), r.state.PendingOrders...)
 	return copyState
 }
 
@@ -1251,6 +1503,8 @@ func (r *Runner) buildCheckpointFromState(state BacktestState) *Checkpoint {
 		MinEquity:       state.MinEquity,
 		MaxDrawdownPct:  state.MaxDrawdownPct,
 		AICacheRef:      r.cachePath,
+		PendingOrders:   append([]PendingOrder(nil), state.PendingOrders...),
+		NextFundingTS:   state.NextFundingTS,
 	}
 }
 
@@ -1300,6 +1554,8 @@ func (r *Runner) applyCheckpoint(ckpt *Checkpoint) error {
 	r.state.MaxEquity = ckpt.MaxEquity
 	r.state.MinEquity = ckpt.MinEquity
 	r.state.MaxDrawdownPct = ckpt.MaxDrawdownPct
+	r.state.PendingOrders = append([]PendingOrder(nil), ckpt.PendingOrders...)
+	r.state.NextFundingTS = ckpt.NextFundingTS
 	r.state.Positions = snapshotsToMap(ckpt.Positions)
 	r.state.LastUpdate = time.Now().UTC()
 	r.lastCheckpoint = time.Now()

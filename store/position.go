@@ -156,6 +156,42 @@ func (s *PositionStore) Create(pos *TraderPosition) error {
 	return nil
 }
 
+// UpsertEntryFill projects the cumulative execution of one entry order into a
+// single open position row. It is safe to call for every partial-fill update.
+func (s *PositionStore) UpsertEntryFill(pos *TraderPosition) error {
+	if pos.EntryOrderID == "" {
+		return fmt.Errorf("entry order ID is required")
+	}
+	now := time.Now()
+	result, err := s.db.Exec(`
+		UPDATE trader_positions SET quantity = ?, entry_price = ?, leverage = ?,
+			fee = ?, protection_status = 'UNPROTECTED',
+			updated_at = ?
+		WHERE trader_id = ? AND exchange_id = ? AND entry_order_id = ? AND status = 'OPEN'
+	`, pos.Quantity, pos.EntryPrice, pos.Leverage, pos.Fee, now.Format(time.RFC3339),
+		pos.TraderID, pos.ExchangeID, pos.EntryOrderID)
+	if err != nil {
+		return fmt.Errorf("failed to update entry fill projection: %w", err)
+	}
+	if affected, _ := result.RowsAffected(); affected > 0 {
+		return nil
+	}
+	return s.Create(pos)
+}
+
+// AttachEntryOrderID links a synchronized exchange position to the persisted
+// entry saga so protection intents can be recovered.
+func (s *PositionStore) AttachEntryOrderID(id int64, entryOrderID string) error {
+	if entryOrderID == "" {
+		return nil
+	}
+	_, err := s.db.Exec(`
+		UPDATE trader_positions SET entry_order_id = ?, updated_at = ?
+		WHERE id = ? AND status = 'OPEN' AND (entry_order_id IS NULL OR entry_order_id = '')
+	`, entryOrderID, time.Now().Format(time.RFC3339), id)
+	return err
+}
+
 // ClosePosition closes position (updates position record)
 func (s *PositionStore) ClosePosition(id int64, exitPrice float64, exitOrderID string, realizedPnL float64, fee float64, closeReason string) error {
 	now := time.Now()

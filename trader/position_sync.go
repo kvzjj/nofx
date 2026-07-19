@@ -413,7 +413,10 @@ func (m *PositionSyncManager) reconcileOrders(traderID, exchangeID, exchangeType
 }
 
 func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, trader Trader, orders []ExchangeOpenOrder, localPositions []*store.TraderPosition) {
-	type protectionState struct{ stopQty, takeQty float64 }
+	type protectionState struct {
+		stopQty, takeQty     float64
+		stopClose, takeClose bool
+	}
 	states := make(map[string]protectionState)
 	positionKeys := make(map[string]struct{}, len(localPositions))
 	for _, pos := range localPositions {
@@ -436,9 +439,11 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 		state := states[key]
 		if order.Kind == "STOP_LOSS" {
 			state.stopQty += order.Quantity
+			state.stopClose = state.stopClose || order.ClosePosition
 		}
 		if order.Kind == "TAKE_PROFIT" {
 			state.takeQty += order.Quantity
+			state.takeClose = state.takeClose || order.ClosePosition
 		}
 		states[key] = state
 	}
@@ -456,6 +461,12 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 			logger.Infof("⚠️  Failed to clear stale protections for %s %s: %v", pos.Symbol, pos.Side, err)
 		}
 		state := states[pos.Symbol+"_"+pos.Side]
+		if state.stopClose {
+			state.stopQty = pos.Quantity
+		}
+		if state.takeClose {
+			state.takeQty = pos.Quantity
+		}
 		status := "UNPROTECTED"
 		tolerance := pos.Quantity*1e-6 + 1e-9
 		if state.stopQty+tolerance >= pos.Quantity && state.takeQty+tolerance >= pos.Quantity {
@@ -465,13 +476,31 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 			logger.Infof("⚠️  Failed to derive protection status for %s %s: %v", pos.Symbol, pos.Side, err)
 		}
 		if pos.EntryOrderID == "" {
+			entryOrder, findErr := m.store.Execution().FindEntryOrderForPosition(traderID, exchangeID, pos.Symbol, pos.Side)
+			if findErr != nil {
+				logger.Infof("⚠️  Failed to recover entry order for %s %s: %v", pos.Symbol, pos.Side, findErr)
+			} else if entryOrder != nil {
+				pos.EntryOrderID = entryOrder.OrderID
+				if err := m.store.Position().AttachEntryOrderID(pos.ID, entryOrder.OrderID); err != nil {
+					logger.Infof("⚠️  Failed to attach recovered entry order %s: %v", entryOrder.OrderID, err)
+				}
+			}
+		}
+		if pos.EntryOrderID == "" {
+			if state.stopQty+tolerance < pos.Quantity {
+				m.emergencyCloseUnprotected(traderID, exchangeID, trader, pos, "missing entry protection intent")
+			}
 			continue
 		}
 		for _, order := range orders {
 			if order.Kind == "" || order.Symbol != pos.Symbol || !strings.EqualFold(order.PositionSide, pos.Side) {
 				continue
 			}
-			if err := m.store.Execution().UpsertReconciledProtection(traderID, exchangeID, pos.EntryOrderID, order.OrderID, pos.Symbol, pos.Side, order.Kind, order.Quantity, order.TriggerPrice); err != nil {
+			protectionQty := order.Quantity
+			if order.ClosePosition {
+				protectionQty = pos.Quantity
+			}
+			if err := m.store.Execution().UpsertReconciledProtection(traderID, exchangeID, pos.EntryOrderID, order.OrderID, pos.Symbol, pos.Side, order.Kind, protectionQty, order.TriggerPrice); err != nil {
 				logger.Infof("⚠️  Failed to reconcile protection order %s: %v", order.OrderID, err)
 			}
 		}
@@ -480,6 +509,7 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 			logger.Infof("⚠️  Failed to load protection intents for %s %s: %v", pos.Symbol, pos.Side, err)
 			continue
 		}
+		closedForSafety := false
 		for _, intent := range intents {
 			covered := state.stopQty
 			if intent.Kind == "TAKE_PROFIT" {
@@ -497,7 +527,7 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 			} else {
 				continue
 			}
-			repairStatus := "REPAIRING"
+			repairStatus := "ACTIVE"
 			repairErrorText := ""
 			if repairErr != nil {
 				repairStatus = "FAILED"
@@ -506,6 +536,67 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 			if err := m.store.Execution().UpsertProtection(traderID, exchangeID, pos.EntryOrderID, pos.Symbol, pos.Side, intent.Kind, missingQuantity, intent.TriggerPrice, repairStatus, intent.AttemptCount+1, repairErrorText); err != nil {
 				logger.Infof("⚠️  Failed to persist protection repair for %s %s: %v", pos.Symbol, pos.Side, err)
 			}
+			if intent.Kind == "STOP_LOSS" && repairErr != nil {
+				m.emergencyCloseUnprotected(traderID, exchangeID, trader, pos, "stop-loss repair failed: "+repairErr.Error())
+				closedForSafety = true
+				break
+			}
+		}
+		if !closedForSafety && state.stopQty+tolerance < pos.Quantity {
+			hasStopIntent := false
+			for _, intent := range intents {
+				if intent.Kind == "STOP_LOSS" && intent.TriggerPrice > 0 {
+					hasStopIntent = true
+					break
+				}
+			}
+			if !hasStopIntent {
+				m.emergencyCloseUnprotected(traderID, exchangeID, trader, pos, "stop-loss intent is unavailable")
+			}
+		}
+	}
+}
+
+func (m *PositionSyncManager) emergencyCloseUnprotected(traderID, exchangeID string, trader Trader, pos *store.TraderPosition, reason string) {
+	logger.Errorf("CRITICAL: closing unprotected %s %s for trader %s: %s", pos.Symbol, pos.Side, traderID, reason)
+	var result map[string]interface{}
+	var err error
+	if pos.Side == "LONG" {
+		result, err = trader.CloseLong(pos.Symbol, 0)
+	} else {
+		result, err = trader.CloseShort(pos.Symbol, 0)
+	}
+	if err != nil {
+		logger.Errorf("CRITICAL: failed to submit emergency close for %s %s: %v", pos.Symbol, pos.Side, err)
+		return
+	}
+	orderID := getOrderIDString(result)
+	status := normalizeOrderState(fmt.Sprint(result["status"]))
+	if orderID != "" && orderID != "0" {
+		if fresh, statusErr := trader.GetOrderStatus(pos.Symbol, orderID); statusErr == nil {
+			result = fresh
+			status = normalizeOrderState(fmt.Sprint(fresh["status"]))
+		}
+	}
+	order := store.TradeOrder{
+		TraderID: traderID, ExchangeID: exchangeID, OrderID: orderID, Symbol: pos.Symbol,
+		PositionSide: pos.Side, Action: "close_" + strings.ToLower(pos.Side), RequestedQty: pos.Quantity,
+		ExecutedQty: getFloatFromMap(result, "executedQty"), AvgPrice: getFloatFromMap(result, "avgPrice"),
+		Fee: getFloatFromMap(result, "commission"), Status: string(status), LastError: reason,
+	}
+	if orderID != "" && orderID != "0" {
+		if err := m.store.Execution().UpsertOrder(order); err != nil {
+			logger.Infof("⚠️  Failed to persist emergency close order %s: %v", orderID, err)
+		}
+	}
+	if status == OrderStateFilled && pos.EntryOrderID != "" {
+		if err := m.store.Execution().UpdateOrderProtection(traderID, exchangeID, pos.EntryOrderID, pos.Quantity, "CLOSED"); err != nil {
+			logger.Infof("⚠️  Failed to finalize unprotected entry %s: %v", pos.EntryOrderID, err)
+		}
+	}
+	if canceler, ok := trader.(PositionOrderCanceler); ok {
+		if err := canceler.CancelPositionOrders(pos.Symbol, pos.Side); err != nil {
+			logger.Infof("⚠️  Failed to cancel residual protection orders for %s %s: %v", pos.Symbol, pos.Side, err)
 		}
 	}
 }

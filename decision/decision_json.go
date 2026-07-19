@@ -14,15 +14,11 @@ import (
 // Expressions are intentionally rejected rather than evaluated.
 func (d *Decision) UnmarshalJSON(data []byte) error {
 	type rawDecision struct {
-		Symbol          string          `json:"symbol"`
-		Action          string          `json:"action"`
-		Leverage        json.RawMessage `json:"leverage"`
-		PositionSizeUSD json.RawMessage `json:"position_size_usd"`
-		StopLoss        json.RawMessage `json:"stop_loss"`
-		TakeProfit      json.RawMessage `json:"take_profit"`
-		Confidence      json.RawMessage `json:"confidence"`
-		RiskUSD         json.RawMessage `json:"risk_usd"`
-		Reasoning       string          `json:"reasoning"`
+		Symbol     string          `json:"symbol"`
+		Action     string          `json:"action"`
+		StopLoss   json.RawMessage `json:"stop_loss"`
+		TakeProfit json.RawMessage `json:"take_profit"`
+		Reasoning  string          `json:"reasoning"`
 	}
 
 	var raw rawDecision
@@ -32,24 +28,14 @@ func (d *Decision) UnmarshalJSON(data []byte) error {
 
 	var err error
 	d.Symbol, d.Action, d.Reasoning = raw.Symbol, raw.Action, raw.Reasoning
-	if d.Leverage, err = parseFlexibleInt(raw.Leverage, "leverage"); err != nil {
-		return err
-	}
-	if d.PositionSizeUSD, err = parseFlexibleFloat(raw.PositionSizeUSD, "position_size_usd"); err != nil {
-		return err
-	}
 	if d.StopLoss, err = parseFlexibleFloat(raw.StopLoss, "stop_loss"); err != nil {
 		return err
 	}
 	if d.TakeProfit, err = parseFlexibleFloat(raw.TakeProfit, "take_profit"); err != nil {
 		return err
 	}
-	if d.Confidence, err = parseFlexibleInt(raw.Confidence, "confidence"); err != nil {
-		return err
-	}
-	if d.RiskUSD, err = parseFlexibleFloat(raw.RiskUSD, "risk_usd"); err != nil {
-		return err
-	}
+	// leverage, position_size_usd, confidence, and risk_usd are ignored even
+	// when present. They are backend outputs, never AI inputs.
 	return nil
 }
 

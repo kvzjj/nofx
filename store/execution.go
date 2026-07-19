@@ -13,19 +13,24 @@ type ExecutionStore struct {
 }
 
 type TradeOrder struct {
-	TraderID     string
-	ExchangeID   string
-	ExchangeType string
-	OrderID      string
-	Symbol       string
-	PositionSide string
-	Action       string
-	RequestedQty float64
-	ExecutedQty  float64
-	AvgPrice     float64
-	Fee          float64
-	Status       string
-	LastError    string
+	TraderID         string
+	ExchangeID       string
+	ExchangeType     string
+	OrderID          string
+	Symbol           string
+	PositionSide     string
+	Action           string
+	RequestedQty     float64
+	ExecutedQty      float64
+	AvgPrice         float64
+	Fee              float64
+	Status           string
+	LastError        string
+	Leverage         int
+	StopLoss         float64
+	TakeProfit       float64
+	ProtectedQty     float64
+	ProtectionStatus string
 }
 
 type ExchangeFill struct {
@@ -72,6 +77,11 @@ func (s *ExecutionStore) InitTables() error {
 			fee REAL NOT NULL DEFAULT 0,
 			status TEXT NOT NULL,
 			last_error TEXT NOT NULL DEFAULT '',
+			leverage INTEGER NOT NULL DEFAULT 0,
+			stop_loss REAL NOT NULL DEFAULT 0,
+			take_profit REAL NOT NULL DEFAULT 0,
+			protected_qty REAL NOT NULL DEFAULT 0,
+			protection_status TEXT NOT NULL DEFAULT 'UNPROTECTED',
 			created_at DATETIME NOT NULL,
 			updated_at DATETIME NOT NULL,
 			UNIQUE(trader_id, exchange_id, order_id)
@@ -132,6 +142,11 @@ func (s *ExecutionStore) InitTables() error {
 	}
 	// Migration for databases created before exchange-side protection IDs were tracked.
 	_, _ = s.db.Exec(`ALTER TABLE protection_orders ADD COLUMN exchange_order_id TEXT NOT NULL DEFAULT ''`)
+	_, _ = s.db.Exec(`ALTER TABLE trade_orders ADD COLUMN leverage INTEGER NOT NULL DEFAULT 0`)
+	_, _ = s.db.Exec(`ALTER TABLE trade_orders ADD COLUMN stop_loss REAL NOT NULL DEFAULT 0`)
+	_, _ = s.db.Exec(`ALTER TABLE trade_orders ADD COLUMN take_profit REAL NOT NULL DEFAULT 0`)
+	_, _ = s.db.Exec(`ALTER TABLE trade_orders ADD COLUMN protected_qty REAL NOT NULL DEFAULT 0`)
+	_, _ = s.db.Exec(`ALTER TABLE trade_orders ADD COLUMN protection_status TEXT NOT NULL DEFAULT 'UNPROTECTED'`)
 	return nil
 }
 
@@ -172,15 +187,22 @@ func (s *ExecutionStore) UpsertOrder(order TradeOrder) error {
 		INSERT INTO trade_orders (
 			trader_id, exchange_id, exchange_type, order_id, symbol, position_side,
 			action, requested_qty, executed_qty, avg_price, fee, status, last_error,
+			leverage, stop_loss, take_profit, protected_qty, protection_status,
 			created_at, updated_at
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(trader_id, exchange_id, order_id) DO UPDATE SET
 			executed_qty = excluded.executed_qty, avg_price = excluded.avg_price,
 			fee = excluded.fee, status = excluded.status, last_error = excluded.last_error,
+			leverage = CASE WHEN excluded.leverage > 0 THEN excluded.leverage ELSE trade_orders.leverage END,
+			stop_loss = CASE WHEN excluded.stop_loss > 0 THEN excluded.stop_loss ELSE trade_orders.stop_loss END,
+			take_profit = CASE WHEN excluded.take_profit > 0 THEN excluded.take_profit ELSE trade_orders.take_profit END,
+			protected_qty = MAX(trade_orders.protected_qty, excluded.protected_qty),
+			protection_status = CASE WHEN excluded.protection_status != '' THEN excluded.protection_status ELSE trade_orders.protection_status END,
 			updated_at = excluded.updated_at
 	`, order.TraderID, order.ExchangeID, order.ExchangeType, order.OrderID, order.Symbol,
 		order.PositionSide, order.Action, order.RequestedQty, order.ExecutedQty, order.AvgPrice,
-		order.Fee, order.Status, order.LastError, now, now)
+		order.Fee, order.Status, order.LastError, order.Leverage, order.StopLoss,
+		order.TakeProfit, order.ProtectedQty, order.ProtectionStatus, now, now)
 	return err
 }
 
@@ -200,7 +222,8 @@ func (s *ExecutionStore) ListActiveOrders(traderID, exchangeID string) ([]TradeO
 	rows, err := s.db.Query(`
 		SELECT trader_id, exchange_id, exchange_type, order_id, symbol,
 			position_side, action, requested_qty, executed_qty, avg_price,
-			fee, status, last_error
+			fee, status, last_error, leverage, stop_loss, take_profit,
+			protected_qty, protection_status
 		FROM trade_orders
 		WHERE trader_id = ? AND exchange_id = ?
 			AND status IN ('INTENT', 'SUBMITTED', 'PARTIAL')
@@ -218,13 +241,83 @@ func (s *ExecutionStore) ListActiveOrders(traderID, exchangeID string) ([]TradeO
 			&order.TraderID, &order.ExchangeID, &order.ExchangeType,
 			&order.OrderID, &order.Symbol, &order.PositionSide, &order.Action,
 			&order.RequestedQty, &order.ExecutedQty, &order.AvgPrice,
-			&order.Fee, &order.Status, &order.LastError,
+			&order.Fee, &order.Status, &order.LastError, &order.Leverage,
+			&order.StopLoss, &order.TakeProfit, &order.ProtectedQty,
+			&order.ProtectionStatus,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan active order: %w", err)
 		}
 		orders = append(orders, order)
 	}
 	return orders, rows.Err()
+}
+
+// ListRecoverableEntryOrders returns entry sagas which still require exchange
+// monitoring or protection repair after a process restart.
+func (s *ExecutionStore) ListRecoverableEntryOrders(traderID, exchangeID string) ([]TradeOrder, error) {
+	rows, err := s.db.Query(`
+		SELECT trader_id, exchange_id, exchange_type, order_id, symbol,
+			position_side, action, requested_qty, executed_qty, avg_price,
+			fee, status, last_error, leverage, stop_loss, take_profit,
+			protected_qty, protection_status
+		FROM trade_orders
+		WHERE trader_id = ? AND exchange_id = ?
+			AND action IN ('open_long', 'open_short')
+			AND (status IN ('INTENT', 'SUBMITTED', 'PARTIAL')
+				OR (executed_qty > protected_qty AND protection_status != 'PROTECTED'))
+		ORDER BY created_at
+	`, traderID, exchangeID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list recoverable entry orders: %w", err)
+	}
+	defer rows.Close()
+	var orders []TradeOrder
+	for rows.Next() {
+		var order TradeOrder
+		if err := rows.Scan(&order.TraderID, &order.ExchangeID, &order.ExchangeType,
+			&order.OrderID, &order.Symbol, &order.PositionSide, &order.Action,
+			&order.RequestedQty, &order.ExecutedQty, &order.AvgPrice, &order.Fee,
+			&order.Status, &order.LastError, &order.Leverage, &order.StopLoss,
+			&order.TakeProfit, &order.ProtectedQty, &order.ProtectionStatus); err != nil {
+			return nil, fmt.Errorf("failed to scan recoverable entry order: %w", err)
+		}
+		orders = append(orders, order)
+	}
+	return orders, rows.Err()
+}
+
+func (s *ExecutionStore) FindEntryOrderForPosition(traderID, exchangeID, symbol, positionSide string) (*TradeOrder, error) {
+	var order TradeOrder
+	err := s.db.QueryRow(`
+		SELECT trader_id, exchange_id, exchange_type, order_id, symbol,
+			position_side, action, requested_qty, executed_qty, avg_price,
+			fee, status, last_error, leverage, stop_loss, take_profit,
+			protected_qty, protection_status
+		FROM trade_orders
+		WHERE trader_id = ? AND exchange_id = ? AND symbol = ? AND position_side = ?
+			AND action IN ('open_long', 'open_short') AND executed_qty > 0
+		ORDER BY updated_at DESC LIMIT 1
+	`, traderID, exchangeID, symbol, positionSide).Scan(
+		&order.TraderID, &order.ExchangeID, &order.ExchangeType, &order.OrderID,
+		&order.Symbol, &order.PositionSide, &order.Action, &order.RequestedQty,
+		&order.ExecutedQty, &order.AvgPrice, &order.Fee, &order.Status,
+		&order.LastError, &order.Leverage, &order.StopLoss, &order.TakeProfit,
+		&order.ProtectedQty, &order.ProtectionStatus)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &order, nil
+}
+
+func (s *ExecutionStore) UpdateOrderProtection(traderID, exchangeID, orderID string, protectedQty float64, status string) error {
+	_, err := s.db.Exec(`
+		UPDATE trade_orders SET protected_qty = ?, protection_status = ?, updated_at = ?
+		WHERE trader_id = ? AND exchange_id = ? AND order_id = ?
+	`, protectedQty, status, time.Now().Format(time.RFC3339Nano), traderID, exchangeID, orderID)
+	return err
 }
 
 func (s *ExecutionStore) RecordFill(order TradeOrder) error {

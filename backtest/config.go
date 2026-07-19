@@ -26,25 +26,32 @@ type LeverageConfig struct {
 
 // BacktestConfig describes the input configuration for a backtest run.
 type BacktestConfig struct {
-	RunID                string   `json:"run_id"`
-	UserID               string   `json:"user_id,omitempty"`
-	AIModelID            string   `json:"ai_model_id,omitempty"`
-	Symbols              []string `json:"symbols"`
-	Timeframes           []string `json:"timeframes"`
-	DecisionTimeframe    string   `json:"decision_timeframe"`
-	DecisionCadenceNBars int      `json:"decision_cadence_nbars"`
-	StartTS              int64    `json:"start_ts"`
-	EndTS                int64    `json:"end_ts"`
-	InitialBalance       float64  `json:"initial_balance"`
-	FeeBps               float64  `json:"fee_bps"`
-	SlippageBps          float64  `json:"slippage_bps"`
-	FillPolicy           string   `json:"fill_policy"`
-	PromptVariant        string   `json:"prompt_variant"`
-	PromptTemplate       string   `json:"prompt_template"`
-	CustomPrompt         string   `json:"custom_prompt"`
-	OverrideBasePrompt   bool     `json:"override_prompt"`
-	CacheAI              bool     `json:"cache_ai"`
-	ReplayOnly           bool     `json:"replay_only"`
+	RunID                string       `json:"run_id"`
+	UserID               string       `json:"user_id,omitempty"`
+	AIModelID            string       `json:"ai_model_id,omitempty"`
+	Symbols              []string     `json:"symbols"`
+	Timeframes           []string     `json:"timeframes"`
+	DecisionTimeframe    string       `json:"decision_timeframe"`
+	DecisionCadenceNBars int          `json:"decision_cadence_nbars"`
+	StartTS              int64        `json:"start_ts"`
+	EndTS                int64        `json:"end_ts"`
+	InitialBalance       float64      `json:"initial_balance"`
+	FeeBps               float64      `json:"fee_bps"`
+	SlippageBps          float64      `json:"slippage_bps"`
+	MakerFeeBps          float64      `json:"maker_fee_bps,omitempty"`
+	TakerFeeBps          float64      `json:"taker_fee_bps,omitempty"`
+	VolatilitySlippage   float64      `json:"volatility_slippage_factor,omitempty"`
+	ImpactBps            float64      `json:"impact_bps,omitempty"`
+	FundingRateBps       float64      `json:"funding_rate_bps,omitempty"`
+	FundingIntervalHours int          `json:"funding_interval_hours,omitempty"`
+	MarginTiers          []MarginTier `json:"margin_tiers,omitempty"`
+	FillPolicy           string       `json:"fill_policy"`
+	PromptVariant        string       `json:"prompt_variant"`
+	PromptTemplate       string       `json:"prompt_template"`
+	CustomPrompt         string       `json:"custom_prompt"`
+	OverrideBasePrompt   bool         `json:"override_prompt"`
+	CacheAI              bool         `json:"cache_ai"`
+	ReplayOnly           bool         `json:"replay_only"`
 
 	AICfg    AIConfig       `json:"ai"`
 	Leverage LeverageConfig `json:"leverage"`
@@ -110,6 +117,20 @@ func (cfg *BacktestConfig) Validate() error {
 	if cfg.InitialBalance <= 0 {
 		cfg.InitialBalance = 1000
 	}
+	if cfg.TakerFeeBps <= 0 {
+		cfg.TakerFeeBps = cfg.FeeBps
+	}
+	if cfg.FundingIntervalHours <= 0 {
+		cfg.FundingIntervalHours = 8
+	}
+	if len(cfg.MarginTiers) == 0 {
+		cfg.MarginTiers = []MarginTier{
+			{NotionalCap: 50_000, InitialMarginRate: 0, MaintenanceMarginRate: 0.004},
+			{NotionalCap: 250_000, InitialMarginRate: 0.02, MaintenanceMarginRate: 0.005},
+			{NotionalCap: 1_000_000, InitialMarginRate: 0.05, MaintenanceMarginRate: 0.01},
+			{NotionalCap: 0, InitialMarginRate: 0.10, MaintenanceMarginRate: 0.025},
+		}
+	}
 
 	if cfg.FillPolicy == "" {
 		cfg.FillPolicy = FillPolicyNextOpen
@@ -163,16 +184,18 @@ func (cfg *BacktestConfig) Duration() time.Duration {
 const (
 	// FillPolicyNextOpen uses the open price of the next bar for execution.
 	FillPolicyNextOpen = "next_open"
-	// FillPolicyBarVWAP uses the approximate VWAP of the current bar for execution.
-	FillPolicyBarVWAP = "bar_vwap"
-	// FillPolicyMidPrice uses the mid-price (high+low)/2 for execution.
+	// Legacy values are retained for decoding old configs, but rejected by
+	// validation because they require information unavailable at bar open.
+	FillPolicyBarVWAP  = "bar_vwap"
 	FillPolicyMidPrice = "mid"
 )
 
 func validateFillPolicy(policy string) error {
 	switch policy {
-	case FillPolicyNextOpen, FillPolicyBarVWAP, FillPolicyMidPrice:
+	case FillPolicyNextOpen:
 		return nil
+	case FillPolicyBarVWAP, FillPolicyMidPrice:
+		return fmt.Errorf("fill_policy '%s' is not event-safe; use '%s'", policy, FillPolicyNextOpen)
 	default:
 		return fmt.Errorf("unsupported fill_policy '%s'", policy)
 	}

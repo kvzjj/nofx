@@ -192,3 +192,8 @@ func (df *DataFeed) decisionBarSnapshot(symbol string, ts int64) (*market.Kline,
 	}
 	return curr, next
 }
+
+func (df *DataFeed) DecisionBar(symbol string, ts int64) *market.Kline {
+	curr, _ := df.decisionBarSnapshot(symbol, ts)
+	return curr
+}

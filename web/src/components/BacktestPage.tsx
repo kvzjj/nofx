@@ -660,8 +660,6 @@ export function BacktestPage() {
               onChange={(e) => handleFormChange('fill', e.target.value)}
             >
               <option value="next_open">{tr('form.fillPolicies.nextOpen')}</option>
-              <option value="bar_vwap">{tr('form.fillPolicies.barVwap')}</option>
-              <option value="mid">{tr('form.fillPolicies.midPrice')}</option>
             </select>
             <select
               className="input"
@@ -1276,4 +1274,3 @@ function Metric({
     </div>
   )
 }
-

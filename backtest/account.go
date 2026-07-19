@@ -3,6 +3,7 @@ package backtest
 import (
 	"fmt"
 	"math"
+	"sort"
 	"strings"
 )
 
@@ -18,6 +19,20 @@ type position struct {
 	Notional         float64
 	LiquidationPrice float64
 	OpenTime         int64
+	StopLoss         float64
+	TakeProfit       float64
+	MaintenanceRate  float64
+}
+
+type MarginTier struct {
+	NotionalCap           float64 `json:"notional_cap"`
+	InitialMarginRate     float64 `json:"initial_margin_rate"`
+	MaintenanceMarginRate float64 `json:"maintenance_margin_rate"`
+}
+
+type ExecutionCost struct {
+	FeeRate      float64
+	SlippageRate float64
 }
 
 type BacktestAccount struct {
@@ -27,6 +42,7 @@ type BacktestAccount struct {
 	slippageRate   float64
 	positions      map[string]*position
 	realizedPnL    float64
+	marginTiers    []MarginTier
 }
 
 func NewBacktestAccount(initialBalance, feeBps, slippageBps float64) *BacktestAccount {
@@ -37,6 +53,20 @@ func NewBacktestAccount(initialBalance, feeBps, slippageBps float64) *BacktestAc
 		slippageRate:   slippageBps / 10000.0,
 		positions:      make(map[string]*position),
 	}
+}
+
+func (acc *BacktestAccount) SetMarginTiers(tiers []MarginTier) {
+	acc.marginTiers = append([]MarginTier(nil), tiers...)
+	sort.Slice(acc.marginTiers, func(i, j int) bool {
+		left, right := acc.marginTiers[i].NotionalCap, acc.marginTiers[j].NotionalCap
+		if left <= 0 {
+			return false
+		}
+		if right <= 0 {
+			return true
+		}
+		return left < right
+	})
 }
 
 func positionKey(symbol, side string) string {
@@ -58,7 +88,11 @@ func (acc *BacktestAccount) removePosition(pos *position) {
 	delete(acc.positions, key)
 }
 
-func (acc *BacktestAccount) Open(symbol, side string, quantity float64, leverage int, price float64, ts int64) (*position, float64, float64, error) {
+func (acc *BacktestAccount) Open(symbol, side string, quantity float64, leverage int, price float64, ts int64, protection ...float64) (*position, float64, float64, error) {
+	return acc.OpenWithCost(symbol, side, quantity, leverage, price, ts, ExecutionCost{FeeRate: acc.feeRate, SlippageRate: acc.slippageRate}, protection...)
+}
+
+func (acc *BacktestAccount) OpenWithCost(symbol, side string, quantity float64, leverage int, price float64, ts int64, cost ExecutionCost, protection ...float64) (*position, float64, float64, error) {
 	if quantity <= 0 {
 		return nil, 0, 0, fmt.Errorf("quantity must be positive")
 	}
@@ -66,10 +100,11 @@ func (acc *BacktestAccount) Open(symbol, side string, quantity float64, leverage
 		return nil, 0, 0, fmt.Errorf("leverage must be positive")
 	}
 
-	execPrice := applySlippage(price, acc.slippageRate, side, true)
+	execPrice := applySlippage(price, cost.SlippageRate, side, true)
 	notional := execPrice * quantity
-	margin := notional / float64(leverage)
-	fee := notional * acc.feeRate
+	initialRate, maintenanceRate := acc.marginRates(notional, leverage)
+	margin := notional * initialRate
+	fee := notional * cost.FeeRate
 
 	if margin+fee > acc.cash+epsilon {
 		return nil, 0, 0, fmt.Errorf("insufficient cash: need %.2f", margin+fee)
@@ -86,7 +121,14 @@ func (acc *BacktestAccount) Open(symbol, side string, quantity float64, leverage
 		pos.Margin = margin
 		pos.Notional = notional
 		pos.OpenTime = ts
-		pos.LiquidationPrice = computeLiquidation(execPrice, leverage, side)
+		pos.MaintenanceRate = maintenanceRate
+		pos.LiquidationPrice = computeTieredLiquidation(execPrice, initialRate, maintenanceRate, side)
+		if len(protection) > 0 {
+			pos.StopLoss = protection[0]
+		}
+		if len(protection) > 1 {
+			pos.TakeProfit = protection[1]
+		}
 	} else {
 		if leverage != pos.Leverage {
 			// Use weighted average leverage (approximate)
@@ -97,13 +139,24 @@ func (acc *BacktestAccount) Open(symbol, side string, quantity float64, leverage
 		pos.Margin += margin
 		pos.EntryPrice = ((pos.EntryPrice * pos.Quantity) + execPrice*quantity) / (pos.Quantity + quantity)
 		pos.Quantity += quantity
-		pos.LiquidationPrice = computeLiquidation(pos.EntryPrice, pos.Leverage, side)
+		_, pos.MaintenanceRate = acc.marginRates(pos.Notional, pos.Leverage)
+		pos.LiquidationPrice = computeTieredLiquidation(pos.EntryPrice, pos.Margin/pos.Notional, pos.MaintenanceRate, side)
+		if len(protection) > 0 {
+			pos.StopLoss = protection[0]
+		}
+		if len(protection) > 1 {
+			pos.TakeProfit = protection[1]
+		}
 	}
 
 	return pos, fee, execPrice, nil
 }
 
 func (acc *BacktestAccount) Close(symbol, side string, quantity float64, price float64) (float64, float64, float64, error) {
+	return acc.CloseWithCost(symbol, side, quantity, price, ExecutionCost{FeeRate: acc.feeRate, SlippageRate: acc.slippageRate})
+}
+
+func (acc *BacktestAccount) CloseWithCost(symbol, side string, quantity float64, price float64, cost ExecutionCost) (float64, float64, float64, error) {
 	key := positionKey(symbol, side)
 	pos, ok := acc.positions[key]
 	if !ok || pos.Quantity <= epsilon {
@@ -118,18 +171,20 @@ func (acc *BacktestAccount) Close(symbol, side string, quantity float64, price f
 		}
 	}
 
-	execPrice := applySlippage(price, acc.slippageRate, side, false)
+	execPrice := applySlippage(price, cost.SlippageRate, side, false)
 	notional := execPrice * quantity
-	fee := notional * acc.feeRate
+	fee := notional * cost.FeeRate
 
 	realized := realizedPnL(pos, quantity, execPrice)
 
-	marginPortion := pos.Margin * (quantity / pos.Quantity)
+	closeRatio := quantity / pos.Quantity
+	marginPortion := pos.Margin * closeRatio
+	notionalPortion := pos.Notional * closeRatio
 	acc.cash += marginPortion + realized - fee
 	acc.realizedPnL += realized - fee
 
 	pos.Quantity -= quantity
-	pos.Notional -= notional
+	pos.Notional -= notionalPortion
 	pos.Margin -= marginPortion
 
 	if pos.Quantity <= epsilon {
@@ -137,6 +192,41 @@ func (acc *BacktestAccount) Close(symbol, side string, quantity float64, price f
 	}
 
 	return realized, fee, execPrice, nil
+}
+
+func (acc *BacktestAccount) ApplyFunding(markPrices map[string]float64, rate float64) float64 {
+	total := 0.0
+	for _, pos := range acc.positions {
+		mark := markPrices[pos.Symbol]
+		if mark <= 0 {
+			mark = pos.EntryPrice
+		}
+		payment := mark * pos.Quantity * rate
+		if pos.Side == "short" {
+			payment = -payment
+		}
+		acc.cash -= payment
+		acc.realizedPnL -= payment
+		total += payment
+	}
+	return total
+}
+
+func (acc *BacktestAccount) marginRates(notional float64, leverage int) (float64, float64) {
+	initial := 1 / float64(leverage)
+	maintenance := 0.005
+	for _, tier := range acc.marginTiers {
+		if tier.NotionalCap <= 0 || notional <= tier.NotionalCap {
+			if tier.InitialMarginRate > initial {
+				initial = tier.InitialMarginRate
+			}
+			if tier.MaintenanceMarginRate > 0 {
+				maintenance = tier.MaintenanceMarginRate
+			}
+			break
+		}
+	}
+	return initial, maintenance
 }
 
 func (acc *BacktestAccount) TotalEquity(priceMap map[string]float64) (float64, float64, map[string]float64) {
@@ -174,15 +264,11 @@ func applySlippage(price float64, rate float64, side string, isOpen bool) float6
 	return price * adjust
 }
 
-func computeLiquidation(entry float64, leverage int, side string) float64 {
-	if leverage <= 0 {
-		return 0
-	}
-	lev := float64(leverage)
+func computeTieredLiquidation(entry, initialRate, maintenanceRate float64, side string) float64 {
 	if side == "long" {
-		return entry * (1.0 - 1.0/lev)
+		return entry * (1 - initialRate + maintenanceRate)
 	}
-	return entry * (1.0 + 1.0/lev)
+	return entry * (1 + initialRate - maintenanceRate)
 }
 
 func realizedPnL(pos *position, qty, price float64) float64 {
@@ -243,6 +329,9 @@ func (acc *BacktestAccount) RestoreFromSnapshots(cash float64, realized float64,
 			Notional:         snap.Quantity * snap.AvgPrice,
 			LiquidationPrice: snap.LiquidationPrice,
 			OpenTime:         snap.OpenTime,
+			StopLoss:         snap.StopLoss,
+			TakeProfit:       snap.TakeProfit,
+			MaintenanceRate:  snap.MaintenanceRate,
 		}
 		key := positionKey(pos.Symbol, pos.Side)
 		acc.positions[key] = pos

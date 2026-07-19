@@ -39,6 +39,13 @@ type PositionOrderCanceler interface {
 	CancelPositionOrders(symbol, positionSide string) error
 }
 
+// FutureFillProtection reports whether an installed close-position protection
+// automatically covers later fills on the same position (for example Binance
+// closePosition conditional orders).
+type FutureFillProtection interface {
+	ProtectionCoversFutureFills() bool
+}
+
 // SingleOrderCanceler cancels one known order without affecting unrelated
 // orders for the same symbol.
 type SingleOrderCanceler interface {
@@ -49,16 +56,17 @@ type SingleOrderCanceler interface {
 // still live at the exchange. Protective orders use STOP_LOSS/TAKE_PROFIT as
 // Kind; regular entry/exit orders leave Kind empty.
 type ExchangeOpenOrder struct {
-	OrderID      string
-	Symbol       string
-	PositionSide string
-	Kind         string
-	Status       OrderState
-	Quantity     float64
-	ExecutedQty  float64
-	AvgPrice     float64
-	Fee          float64
-	TriggerPrice float64
+	OrderID       string
+	Symbol        string
+	PositionSide  string
+	Kind          string
+	Status        OrderState
+	Quantity      float64
+	ExecutedQty   float64
+	AvgPrice      float64
+	Fee           float64
+	TriggerPrice  float64
+	ClosePosition bool
 }
 
 // OpenOrderLister is implemented by exchanges that expose an account-level

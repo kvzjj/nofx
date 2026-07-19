@@ -64,6 +64,8 @@ type FuturesTrader struct {
 	cacheDuration time.Duration
 }
 
+func (t *FuturesTrader) ProtectionCoversFutureFills() bool { return true }
+
 // NewFuturesTrader creates futures trader
 func NewFuturesTrader(apiKey, secretKey string, userId string) *FuturesTrader {
 	return NewFuturesTraderWithTestnet(apiKey, secretKey, userId, false)
@@ -721,6 +723,7 @@ func (t *FuturesTrader) ListOpenOrders() ([]ExchangeOpenOrder, error) {
 			PositionSide: positionSide, Kind: kind,
 			Status: normalizeOrderState(string(order.Status)), Quantity: qty,
 			ExecutedQty: executed, AvgPrice: avgPrice, TriggerPrice: triggerPrice,
+			ClosePosition: order.ClosePosition,
 		})
 	}
 	return result, nil
@@ -889,19 +892,12 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		posSide = futures.PositionSideTypeShort
 	}
 
-	// Format quantity
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
-	if err != nil {
-		return err
-	}
-
-	_, err = t.client.NewCreateOrderService().
+	_, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeStopMarket).
 		StopPrice(fmt.Sprintf("%.8f", stopPrice)).
-		Quantity(quantityStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
 		NewClientOrderID(getBrOrderID()).
@@ -928,19 +924,12 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		posSide = futures.PositionSideTypeShort
 	}
 
-	// Format quantity
-	quantityStr, err := t.FormatQuantity(symbol, quantity)
-	if err != nil {
-		return err
-	}
-
-	_, err = t.client.NewCreateOrderService().
+	_, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeTakeProfitMarket).
 		StopPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
-		Quantity(quantityStr).
 		WorkingType(futures.WorkingTypeContractPrice).
 		ClosePosition(true).
 		NewClientOrderID(getBrOrderID()).
