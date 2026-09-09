@@ -22,7 +22,7 @@
 ### Core Features
 
 - **Multi-AI Support**: Run DeepSeek, Qwen, GPT, Claude, Gemini, Grok, Kimi - switch models anytime
-- **Multi-Exchange**: Trade on Binance, Bybit, OKX, Bitget, Hyperliquid, Aster DEX, Lighter from one platform
+- **Binance Futures + Paper Trading**: Live trading on Binance Futures, plus a built-in simulated exchange (real market prices, locally simulated fills) for zero-risk strategy validation
 - **Strategy Studio**: Visual strategy builder with coin sources, indicators, and risk controls
 - **AI Competition Mode**: Multiple AI traders compete in real-time, track performance side by side
 - **Web-Based Config**: No JSON editing - configure everything through the web interface
@@ -75,22 +75,52 @@ Join our Telegram developer community: **[NOFX Developer Community](https://t.me
 
 ## Supported Exchanges
 
-### CEX (Centralized Exchanges)
+> **Important:** Going forward, live trading in NOFX supports **Binance Futures only**. Adapters for other exchanges are not available in current builds and are no longer updated.
+
+### Live Trading (CEX)
 
 | Exchange | Status | Register (Fee Discount) |
 |----------|--------|-------------------------|
-| **Binance** | ✅ Supported | [Register](https://www.binance.com/join?ref=NOFXENG) |
-| **Bybit** | ✅ Supported | [Register](https://partner.bybit.com/b/83856) |
-| **OKX** | ✅ Supported | [Register](https://www.okx.com/join/1865360) |
-| **Bitget** | ✅ Supported | [Register](https://www.bitget.com/referral/register?from=referral&clacCode=c8a43172) |
+| **Binance Futures** | ✅ Supported | [Register](https://www.binance.com/join?ref=NOFXENG) |
 
-### Perp-DEX (Decentralized Perpetual Exchanges)
+### Built-in Paper Trading (Simulated)
 
-| Exchange | Status | Register (Fee Discount) |
-|----------|--------|-------------------------|
-| **Hyperliquid** | ✅ Supported | [Register](https://app.hyperliquid.xyz/join/AITRADING) |
-| **Aster DEX** | ✅ Supported | [Register](https://www.asterdex.com/en/referral/fdfc0e) |
-| **Lighter** | ✅ Supported | [Register](https://lighter.xyz) |
+| Exchange | Status | Keys Required |
+|----------|--------|---------------|
+| **Paper Trading** | ✅ Built-in | None - real market prices with locally simulated fills. See [Paper Trading](#paper-trading-simulated) below. |
+
+### Other Exchanges
+
+| Exchange | Status |
+|----------|--------|
+| Bybit / OKX / Bitget | ❌ Not available in current builds (no longer updated) |
+| Hyperliquid / Aster DEX / Lighter | ❌ Not available in current builds (no longer updated) |
+
+---
+
+## Paper Trading (Simulated)
+
+Paper Trading is a built-in simulated exchange: AI traders run the **exact same decision loop, risk controls, and audit trail as live trading**, but orders are matched locally against real market prices - no API keys, no real funds, zero risk.
+
+### Quick Start
+
+1. **Config → Exchanges → Add** and select **Paper Trading (Simulated)** - no API key required
+2. **Create a trader** bound to the paper account; the trader's *initial balance* becomes the simulated capital (default 10,000 USDT)
+3. Start the trader - dashboard, decision logs, and competition mode all work as usual
+
+### Simulation Model
+
+- Market orders fill at the live price ± 0.02% slippage; taker fee 0.05%
+- Limit entries fill when the price crosses the limit; maker fee 0.02%
+- Stop-loss / take-profit orders trigger on price crossing and fill at the trigger price (exchange-side stops are simulated too)
+- A background matcher evaluates resting orders every 3 seconds using websocket market data
+- Simulated balances, positions, and orders persist across restarts
+- **One-click reset** (↺ Reset button on the trader card) wipes simulated state and restores the initial balance
+
+### Limitations
+
+- Funding rates are **not** simulated - PnL for positions held across funding timestamps is slightly optimistic
+- Liquidation is approximated; the real exchange may liquidate earlier under extreme conditions
 
 ---
 

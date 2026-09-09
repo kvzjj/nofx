@@ -102,17 +102,17 @@ type AutoTrader struct {
 	lifecycleMutex        sync.Mutex
 	isRunning             bool
 	isStopping            bool
-	startTime             time.Time          // System start time
-	callCount             atomic.Int64       // AI call count (read by API goroutines)
-	positionFirstSeenTime map[string]int64   // Position first seen time (symbol_side -> timestamp in milliseconds)
-	stopMonitorCh         chan struct{}      // Used to stop monitoring goroutine
-	monitorWg             sync.WaitGroup     // Used to wait for monitoring goroutine to finish
-	peakPnLCache          map[string]float64 // Peak profit cache (symbol -> peak P&L percentage)
-	peakPnLCacheMutex     sync.RWMutex       // Cache read-write lock
-	entryMutex            sync.Mutex         // Serializes risk snapshot and entry submission
-	riskMutex             sync.Mutex         // Protects account-level circuit-breaker state
-	lastBalanceSyncTime   time.Time          // Last balance sync time
-	userID                string             // User ID
+	startTime             time.Time               // System start time
+	callCount             atomic.Int64            // AI call count (read by API goroutines)
+	positionFirstSeenTime map[string]int64        // Position first seen time (symbol_side -> timestamp in milliseconds)
+	stopMonitorCh         chan struct{}           // Used to stop monitoring goroutine
+	monitorWg             sync.WaitGroup          // Used to wait for monitoring goroutine to finish
+	peakPnLCache          map[string]peakPnLEntry // Peak profit cache (symbol_side -> peak record)
+	peakPnLCacheMutex     sync.RWMutex            // Cache read-write lock
+	entryMutex            sync.Mutex              // Serializes risk snapshot and entry submission
+	riskMutex             sync.Mutex              // Protects account-level circuit-breaker state
+	lastBalanceSyncTime   time.Time               // Last balance sync time
+	userID                string                  // User ID
 }
 
 // NewAutoTrader creates an automatic trader
@@ -245,8 +245,21 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	case "binance":
 		logger.Infof("🏦 [%s] Using Binance Futures trading (testnet=%v)", config.Name, config.BinanceTestnet)
 		trader = NewFuturesTraderWithTestnet(config.BinanceAPIKey, config.BinanceSecretKey, userID, config.BinanceTestnet)
+	case "paper":
+		logger.Infof("📒 [%s] Using paper trading (simulated fills at real market prices)", config.Name)
+		paper, perr := NewPaperTrader(config.ID, config.InitialBalance, st)
+		if perr != nil {
+			return nil, fmt.Errorf("failed to create paper trading account: %w", perr)
+		}
+		trader = paper
 	default:
 		return nil, fmt.Errorf("unsupported trading platform: %s", config.Exchange)
+	}
+
+	// Simulated exchanges run a background matcher for resting orders
+	// (limit entries, stop-loss/take-profit triggers).
+	if engine, ok := trader.(MatchEngine); ok {
+		engine.Start()
 	}
 
 	// Validate initial balance configuration, auto-fetch from exchange if 0
@@ -317,7 +330,7 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		positionFirstSeenTime: make(map[string]int64),
 		stopMonitorCh:         make(chan struct{}),
 		monitorWg:             sync.WaitGroup{},
-		peakPnLCache:          make(map[string]float64),
+		peakPnLCache:          make(map[string]peakPnLEntry),
 		peakPnLCacheMutex:     sync.RWMutex{},
 		lastBalanceSyncTime:   time.Now(),
 		userID:                userID,
@@ -371,6 +384,7 @@ func (at *AutoTrader) run(stopCh <-chan struct{}) error {
 	logger.Infof("💰 Initial balance: %.2f USDT", at.initialBalance)
 	logger.Infof("⚙️  Scan interval: %v", at.config.ScanInterval)
 	logger.Info("🤖 AI proposes direction/invalidation/target; backend determines permission, size, and leverage")
+	at.loadPeakPnLs()
 	at.resumeEntryOrderSagas()
 	// Start drawdown monitoring
 	at.startDrawdownMonitor(stopCh)
@@ -410,6 +424,11 @@ func (at *AutoTrader) Stop() {
 	}
 	at.isStopping = true
 	close(at.stopMonitorCh) // Notify monitoring goroutine to stop
+	// Simulated exchanges must also stop their background matcher so trader
+	// reloads do not leak goroutines.
+	if engine, ok := at.trader.(MatchEngine); ok {
+		engine.Stop()
+	}
 	at.lifecycleMutex.Unlock()
 	at.monitorWg.Wait() // Wait for monitoring goroutine to finish
 	at.lifecycleMutex.Lock()
@@ -712,13 +731,19 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		if updateTime == 0 {
 			if _, exists := at.positionFirstSeenTime[posKey]; !exists {
 				at.positionFirstSeenTime[posKey] = time.Now().UnixMilli()
+				// A position seen for the first time must not inherit the peak
+				// recorded for a previous position on the same symbol+side (the
+				// old one closed without going through our close handlers, e.g.
+				// via an exchange-side stop-loss). Peaks restored from the DB are
+				// exempt: loadPeakPnLs seeds positionFirstSeenTime for them.
+				at.ClearPeakPnLCache(symbol, side)
 			}
 			updateTime = at.positionFirstSeenTime[posKey]
 		}
 
 		// Get peak profit rate for this position
 		at.peakPnLCacheMutex.RLock()
-		peakPnlPct := at.peakPnLCache[posKey]
+		peakPnlPct := at.peakPnLCache[posKey].Pct
 		at.peakPnLCacheMutex.RUnlock()
 
 		positionInfos = append(positionInfos, decision.PositionInfo{
@@ -1301,6 +1326,7 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 		// intent is satisfied as long as we stopped any pending entry.
 		if !positionFound && pendingCanceled > 0 {
 			logger.Infof("  ✓ No open long on exchange; canceled %d pending long entry order(s) for %s", pendingCanceled, decision.Symbol)
+			at.ClearPeakPnLCache(decision.Symbol, "long")
 			return nil
 		}
 		return err
@@ -1321,6 +1347,8 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	}
 	if filledQty := numberValue(order["executedQty"]); quantity <= 0 || filledQty+1e-9 >= quantity {
 		at.cancelPositionOrders(decision.Symbol, "LONG")
+		// Trailing profit-protection state belongs to the closed position.
+		at.ClearPeakPnLCache(decision.Symbol, "long")
 	} else {
 		return fmt.Errorf("close long order %s only filled %.8f of %.8f", getOrderIDString(order), filledQty, quantity)
 	}
@@ -1391,6 +1419,8 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	}
 	if filledQty := numberValue(order["executedQty"]); quantity <= 0 || filledQty+1e-9 >= quantity {
 		at.cancelPositionOrders(decision.Symbol, "SHORT")
+		// Trailing profit-protection state belongs to the closed position.
+		at.ClearPeakPnLCache(decision.Symbol, "short")
 	} else {
 		return fmt.Errorf("close short order %s only filled %.8f of %.8f", getOrderIDString(order), filledQty, quantity)
 	}
@@ -1792,6 +1822,18 @@ func (at *AutoTrader) startDrawdownMonitor(stopCh <-chan struct{}) {
 
 // checkPositionDrawdown checks position drawdown situation
 func (at *AutoTrader) checkPositionDrawdown() {
+	// The trailing profit-protection policy is strategy-owned. Older
+	// configs (or a nil strategy config) keep the historical always-on
+	// behavior via the defaults in RiskControlConfig.
+	var risk store.RiskControlConfig
+	if at.config.StrategyConfig != nil {
+		risk = at.config.StrategyConfig.RiskControl
+	}
+	triggerPct, givebackPct := risk.TrailingProfitExitLevels()
+	if !risk.TrailingProfitExitEnabled() {
+		return
+	}
+
 	// Get current positions
 	positions, err := at.trader.GetPositions()
 	if err != nil {
@@ -1818,8 +1860,10 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			continue
 		}
 
-		// Calculate current P&L percentage
-		leverage := 10 // Default value
+		// Calculate current P&L percentage. A missing leverage field must
+		// default to 1x: defaulting to a higher value would inflate PnL% and
+		// could trigger an unjustified emergency close.
+		leverage := 1
 		if lev, ok := accountNumber(pos, "leverage"); ok && lev > 0 {
 			leverage = int(lev)
 		}
@@ -1832,21 +1876,19 @@ func (at *AutoTrader) checkPositionDrawdown() {
 		}
 
 		// Construct unique position identifier (distinguish long/short)
-		posKey := symbol + "_" + side
+		posKey := peakCacheKey(symbol, side)
 
 		// Get historical peak profit for this position
 		at.peakPnLCacheMutex.RLock()
-		peakPnLPct, exists := at.peakPnLCache[posKey]
+		peakEntry, exists := at.peakPnLCache[posKey]
 		at.peakPnLCacheMutex.RUnlock()
 
-		if !exists {
-			// If no historical peak record, use current P&L as initial value
-			peakPnLPct = currentPnLPct
-			at.UpdatePeakPnL(symbol, side, currentPnLPct)
-		} else {
-			// Update peak cache
-			at.UpdatePeakPnL(symbol, side, currentPnLPct)
+		peakPnLPct := currentPnLPct
+		if exists {
+			peakPnLPct = peakEntry.Pct
 		}
+		// Update peak cache (persists when a new peak is recorded)
+		at.UpdatePeakPnL(symbol, side, currentPnLPct)
 
 		// Calculate drawdown (magnitude of decline from peak)
 		var drawdownPct float64
@@ -1854,8 +1896,9 @@ func (at *AutoTrader) checkPositionDrawdown() {
 			drawdownPct = ((peakPnLPct - currentPnLPct) / peakPnLPct) * 100
 		}
 
-		// Check close position condition: profit > 5% and drawdown >= 40%
-		if currentPnLPct > 5.0 && drawdownPct >= 40.0 {
+		// Check close position condition: profit above the trigger threshold
+		// and retraced by the configured giveback fraction from its peak.
+		if currentPnLPct > triggerPct && drawdownPct >= givebackPct {
 			logger.Infof("🚨 Drawdown close position condition triggered: %s %s | Current profit: %.2f%% | Peak profit: %.2f%% | Drawdown: %.2f%%",
 				symbol, side, currentPnLPct, peakPnLPct, drawdownPct)
 
@@ -1867,7 +1910,7 @@ func (at *AutoTrader) checkPositionDrawdown() {
 				// Clear cache for this position after closing
 				at.ClearPeakPnLCache(symbol, side)
 			}
-		} else if currentPnLPct > 5.0 {
+		} else if currentPnLPct > triggerPct {
 			// Record situations close to close position condition (for debugging)
 			logger.Infof("📊 Drawdown monitoring: %s %s | Profit: %.2f%% | Peak: %.2f%% | Drawdown: %.2f%%",
 				symbol, side, currentPnLPct, peakPnLPct, drawdownPct)
@@ -1891,15 +1934,77 @@ func (at *AutoTrader) emergencyClosePosition(symbol, side string) error {
 		return fmt.Errorf("unknown position direction: %s", side)
 	}
 	if err != nil {
+		at.logBackendForcedAction(symbol, action, "", err)
 		return err
 	}
 	if !at.recordAndConfirmOrder(order, symbol, action, 0, 0, 0, 0) {
-		return fmt.Errorf("emergency close order %s was not confirmed filled", getOrderIDString(order))
+		confirmErr := fmt.Errorf("emergency close order %s was not confirmed filled", getOrderIDString(order))
+		at.logBackendForcedAction(symbol, action, getOrderIDString(order), confirmErr)
+		return confirmErr
 	}
 	at.cancelPositionOrders(symbol, strings.ToUpper(side))
 	logger.Infof("✅ Emergency close %s position confirmed, order ID: %v", side, order["orderId"])
+	at.logBackendForcedAction(symbol, action, getOrderIDString(order), nil)
 
 	return nil
+}
+
+// logBackendForcedAction persists a decision record for backend-initiated
+// position actions so the audit trail explains WHY a position was closed
+// outside the AI decision cycle.
+func (at *AutoTrader) logBackendForcedAction(symbol, action, orderID string, actionErr error) {
+	if at.store == nil {
+		return
+	}
+	var risk store.RiskControlConfig
+	if at.config.StrategyConfig != nil {
+		risk = at.config.StrategyConfig.RiskControl
+	}
+	trigger, giveback := risk.TrailingProfitExitLevels()
+
+	reason := fmt.Sprintf("backend trailing profit protection: profit retraced %.0f%%+ from peak (trigger %.1f%%, giveback %.0f%%)", giveback, trigger, giveback)
+	if actionErr != nil {
+		reason = fmt.Sprintf("backend trailing profit protection attempted close but failed: %v", actionErr)
+	}
+
+	record := &store.DecisionRecord{
+		Timestamp: time.Now().UTC(),
+		ExecutionLog: []string{
+			fmt.Sprintf("🚨 %s %s: %s", symbol, action, reason),
+		},
+		Success:   actionErr == nil,
+		Decisions: []store.DecisionAction{{Action: action, Symbol: symbol, Timestamp: time.Now(), Success: actionErr == nil, OrderID: 0, Error: errString(actionErr)}},
+	}
+	// DecisionAction has no free-text field; keep the reason in ExecutionLog
+	// and the decision log's error column.
+	if actionErr != nil {
+		record.ErrorMessage = reason
+	}
+	if err := at.saveDecision(record); err != nil {
+		logger.Warnf("⚠️ [%s] failed to save backend-forced action record: %v", at.name, err)
+	}
+}
+
+func errString(err error) string {
+	if err == nil {
+		return ""
+	}
+	return err.Error()
+}
+
+// peakPnLEntry records a position's peak unrealized PnL together with the
+// moment it was observed. The timestamp lets the drawdown monitor detect
+// peaks recorded for a *previous* position on the same symbol+side (the
+// position was closed and reopened after the peak was stored).
+type peakPnLEntry struct {
+	Pct       float64
+	UpdatedAt time.Time
+}
+
+// peakCacheKey builds the cache key for a position. Side is normalized to
+// lowercase to match exchange position payloads.
+func peakCacheKey(symbol, side string) string {
+	return strings.ToUpper(strings.TrimSpace(symbol)) + "_" + strings.ToLower(strings.TrimSpace(side))
 }
 
 // GetPeakPnLCache gets peak profit cache
@@ -1910,35 +2015,97 @@ func (at *AutoTrader) GetPeakPnLCache() map[string]float64 {
 	// Return a copy of the cache
 	cache := make(map[string]float64)
 	for k, v := range at.peakPnLCache {
-		cache[k] = v
+		cache[k] = v.Pct
 	}
 	return cache
 }
 
-// UpdatePeakPnL updates peak profit cache
+// UpdatePeakPnL updates peak profit cache and persists new peaks so the
+// trailing profit protection survives restarts.
 func (at *AutoTrader) UpdatePeakPnL(symbol, side string, currentPnLPct float64) {
-	at.peakPnLCacheMutex.Lock()
-	defer at.peakPnLCacheMutex.Unlock()
+	posKey := peakCacheKey(symbol, side)
 
-	posKey := symbol + "_" + side
-	if peak, exists := at.peakPnLCache[posKey]; exists {
-		// Update peak (if long, take larger value; if short, currentPnLPct is negative, also compare)
-		if currentPnLPct > peak {
-			at.peakPnLCache[posKey] = currentPnLPct
+	at.peakPnLCacheMutex.Lock()
+	peak, exists := at.peakPnLCache[posKey]
+	if exists && currentPnLPct <= peak.Pct {
+		at.peakPnLCacheMutex.Unlock()
+		return
+	}
+	at.peakPnLCache[posKey] = peakPnLEntry{Pct: currentPnLPct, UpdatedAt: time.Now()}
+	at.peakPnLCacheMutex.Unlock()
+
+	// Persist only when a new peak was recorded (avoids a DB write per tick).
+	if at.store != nil {
+		if err := at.store.Position().UpsertPeakPnL(at.id, strings.ToUpper(strings.TrimSpace(symbol)), strings.ToLower(strings.TrimSpace(side)), currentPnLPct); err != nil {
+			logger.Warnf("⚠️ [%s] failed to persist peak PnL for %s: %v", at.name, posKey, err)
 		}
-	} else {
-		// First time recording
-		at.peakPnLCache[posKey] = currentPnLPct
 	}
 }
 
 // ClearPeakPnLCache clears peak cache for specified position
 func (at *AutoTrader) ClearPeakPnLCache(symbol, side string) {
+	posKey := peakCacheKey(symbol, side)
+
+	at.peakPnLCacheMutex.Lock()
+	delete(at.peakPnLCache, posKey)
+	at.peakPnLCacheMutex.Unlock()
+
+	if at.store != nil {
+		if err := at.store.Position().DeletePeakPnL(at.id, strings.ToUpper(strings.TrimSpace(symbol)), strings.ToLower(strings.TrimSpace(side))); err != nil {
+			logger.Warnf("⚠️ [%s] failed to delete persisted peak PnL for %s: %v", at.name, posKey, err)
+		}
+	}
+}
+
+// loadPeakPnLs restores persisted peak PnL state after a restart. Rows for
+// positions that no longer exist on the exchange (closed while the trader
+// was down, e.g. by exchange-side stop-loss) are removed.
+func (at *AutoTrader) loadPeakPnLs() {
+	if at.store == nil {
+		return
+	}
+	peaks, err := at.store.Position().GetPeakPnLs(at.id)
+	if err != nil {
+		logger.Warnf("⚠️ [%s] failed to load peak PnL state: %v", at.name, err)
+		return
+	}
+	if len(peaks) == 0 {
+		return
+	}
+
+	live := make(map[string]bool)
+	positions, posErr := at.trader.GetPositions()
+	if posErr != nil {
+		// Without a position snapshot, keep persisted peaks as-is: a stale
+		// entry is guarded by the monitor's first-seen timestamp check.
+		logger.Warnf("⚠️ [%s] could not verify open positions while loading peaks: %v", at.name, posErr)
+	} else {
+		for _, pos := range positions {
+			symbol, _ := pos["symbol"].(string)
+			side, _ := pos["side"].(string)
+			if symbol != "" && side != "" {
+				live[peakCacheKey(symbol, side)] = true
+			}
+		}
+	}
+
 	at.peakPnLCacheMutex.Lock()
 	defer at.peakPnLCacheMutex.Unlock()
-
-	posKey := symbol + "_" + side
-	delete(at.peakPnLCache, posKey)
+	for key, pct := range peaks {
+		if len(live) > 0 && !live[key] {
+			if idx := strings.LastIndex(key, "_"); idx > 0 {
+				_ = at.store.Position().DeletePeakPnL(at.id, key[:idx], key[idx+1:])
+			}
+			continue
+		}
+		at.peakPnLCache[key] = peakPnLEntry{Pct: pct, UpdatedAt: time.Now()}
+		// Seed first-seen so the next buildTradingContext cycle does not
+		// treat this live position as brand-new and wipe the restored peak.
+		if _, exists := at.positionFirstSeenTime[key]; !exists {
+			at.positionFirstSeenTime[key] = time.Now().UnixMilli()
+		}
+	}
+	logger.Infof("📊 [%s] restored peak PnL state for %d position(s)", at.name, len(at.peakPnLCache))
 }
 
 func isLimitOrderResult(orderResult map[string]interface{}) bool {

@@ -62,6 +62,15 @@ type SingleOrderCanceler interface {
 	CancelOrder(symbol, orderID string) error
 }
 
+// MatchEngine is implemented by simulated exchanges (paper trading) that
+// run a background matcher evaluating resting orders against live prices.
+// Stop terminates the matcher; it must be called when the owning trader is
+// removed so reloads do not leak goroutines.
+type MatchEngine interface {
+	Start()
+	Stop()
+}
+
 // ExchangeOpenOrder is the normalized account-level view of an order that is
 // still live at the exchange. Protective orders use STOP_LOSS/TAKE_PROFIT as
 // Kind; regular entry/exit orders leave Kind empty.

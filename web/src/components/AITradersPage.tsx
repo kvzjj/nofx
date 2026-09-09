@@ -28,6 +28,7 @@ import {
   Eye,
   EyeOff,
   ExternalLink,
+  RotateCcw,
 } from 'lucide-react'
 import { confirmToast } from '../lib/notify'
 import { toast } from 'sonner'
@@ -182,7 +183,10 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const configuredExchanges =
     allExchanges?.filter((e) => {
       const exchangeType = (e.exchange_type || e.id).toLowerCase()
-      if (exchangeType !== 'binance') return false
+      // Binance is the only live exchange; "paper" is the built-in simulated
+      // exchange. Both are usable for trader creation without credentials
+      // checks beyond the enabled flag (paper needs no keys).
+      if (exchangeType !== 'binance' && exchangeType !== 'paper') return false
       return e.enabled
     }) || []
 
@@ -192,7 +196,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const enabledExchanges =
     allExchanges?.filter((e) => {
       const exchangeType = (e.exchange_type || e.id).toLowerCase()
-      if (exchangeType !== 'binance') return false
+      if (exchangeType !== 'binance' && exchangeType !== 'paper') return false
       if (!e.enabled) return false
       return true
     }) || []
@@ -357,6 +361,29 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     } catch (error) {
       console.error('Failed to toggle trader:', error)
       toast.error(t('operationFailed', language))
+    }
+  }
+
+  // 重置模拟盘账户：清空模拟持仓/挂单/交易记录，余额恢复为初始资金
+  const handleResetPaperAccount = async (traderId: string) => {
+    const confirmed = await confirmToast(
+      language === 'zh'
+        ? '确定重置模拟盘账户？模拟持仓、挂单和交易记录将被清空，余额恢复为初始资金。'
+        : 'Reset this paper account? Simulated positions, orders and trade history will be wiped; the balance returns to its initial value.'
+    )
+    if (!confirmed) return
+    try {
+      await toast.promise(api.resetPaperAccount(traderId), {
+        loading: language === 'zh' ? '正在重置模拟账户…' : 'Resetting paper account...',
+        success:
+          language === 'zh'
+            ? '模拟账户已重置'
+            : 'Paper account reset',
+        error: language === 'zh' ? '重置模拟账户失败' : 'Failed to reset paper account',
+      })
+      await mutateTraders()
+    } catch (error) {
+      console.error('Failed to reset paper account:', error)
     }
   }
 
@@ -1111,6 +1138,35 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                         <EyeOff className="w-3 h-3 md:w-4 md:h-4" />
                       )}
                     </button>
+
+                    {(() => {
+                      // 仅模拟盘账户显示一键重置按钮
+                      const exchange = allExchanges?.find(
+                        (e) => e.id === trader.exchange_id
+                      )
+                      if (exchange?.exchange_type?.toLowerCase() !== 'paper')
+                        return null
+                      return (
+                        <button
+                          onClick={() =>
+                            handleResetPaperAccount(trader.trader_id)
+                          }
+                          className="px-2 md:px-3 py-1.5 md:py-2 rounded text-xs md:text-sm font-semibold transition-all hover:scale-105 whitespace-nowrap flex items-center gap-1"
+                          style={{
+                            background: 'rgba(14, 203, 129, 0.1)',
+                            color: '#0ECB81',
+                          }}
+                          title={
+                            language === 'zh'
+                              ? '重置模拟账户（清空持仓与记录，恢复初始资金）'
+                              : 'Reset paper account (wipe positions & history, restore initial balance)'
+                          }
+                        >
+                          <RotateCcw className="w-3 h-3 md:w-4 md:h-4" />
+                          {language === 'zh' ? '重置' : 'Reset'}
+                        </button>
+                      )
+                    })()}
 
                     <button
                       onClick={() => handleDeleteTrader(trader.trader_id)}

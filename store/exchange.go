@@ -34,9 +34,10 @@ type Exchange struct {
 }
 
 // IsSupportedExchangeType reports whether the exchange is currently exposed
-// for account configuration and trader execution.
+// for account configuration and trader execution. "paper" is the built-in
+// simulated exchange: real market data, locally simulated fills, no keys.
 func IsSupportedExchangeType(exchangeType string) bool {
-	return exchangeType == "binance"
+	return exchangeType == "binance" || exchangeType == "paper"
 }
 
 func (s *ExchangeStore) initTables() error {
@@ -284,6 +285,8 @@ func getExchangeNameAndType(exchangeType string) (name string, typ string) {
 	switch exchangeType {
 	case "binance":
 		return "Binance Futures", "cex"
+	case "paper":
+		return "Paper Trading", "sim"
 	default:
 		return exchangeType + " Exchange", "cex"
 	}

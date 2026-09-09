@@ -7,9 +7,22 @@ import (
 	"fmt"
 	"nofx/logger"
 	"sync"
+	"time"
 
 	_ "modernc.org/sqlite"
 )
+
+// dbTimeLayout matches SQLite's CURRENT_TIMESTAMP output, which is always
+// UTC. Timestamps must therefore be parsed in time.UTC; using time.Parse
+// would silently reinterpret them in the server's local zone.
+const dbTimeLayout = "2006-01-02 15:04:05"
+
+// parseDBTime parses a SQLite timestamp as UTC, returning the zero time on
+// malformed input (mirroring the previous `t, _ = time.Parse(...)` behavior).
+func parseDBTime(value string) time.Time {
+	t, _ := time.ParseInLocation(dbTimeLayout, value, time.UTC)
+	return t
+}
 
 // Store unified data storage interface
 type Store struct {
@@ -25,6 +38,7 @@ type Store struct {
 	position  *PositionStore
 	execution *ExecutionStore
 	strategy  *StrategyStore
+	paper     *PaperStore
 	equity    *EquityStore
 
 	// Encryption functions
@@ -143,6 +157,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.Strategy().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize strategy tables: %w", err)
+	}
+	if err := s.Paper().InitTables(); err != nil {
+		return fmt.Errorf("failed to initialize paper trading tables: %w", err)
 	}
 	if err := s.Equity().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize equity tables: %w", err)
@@ -269,6 +286,16 @@ func (s *Store) Strategy() *StrategyStore {
 		s.strategy = &StrategyStore{db: s.db}
 	}
 	return s.strategy
+}
+
+// Paper gets paper-trading (simulated account) storage
+func (s *Store) Paper() *PaperStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.paper == nil {
+		s.paper = &PaperStore{db: s.db}
+	}
+	return s.paper
 }
 
 // Equity gets equity storage

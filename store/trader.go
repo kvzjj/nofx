@@ -250,8 +250,8 @@ func (s *TraderStore) List(userID string) ([]*Trader, error) {
 		if err != nil {
 			return nil, err
 		}
-		t.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-		t.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+		t.CreatedAt = parseDBTime(createdAt)
+		t.UpdatedAt = parseDBTime(updatedAt)
 		traders = append(traders, &t)
 	}
 	return traders, nil
@@ -370,12 +370,12 @@ func (s *TraderStore) GetFullConfig(userID, traderID string) (*TraderFullConfig,
 		return nil, err
 	}
 
-	trader.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", traderCreatedAt)
-	trader.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", traderUpdatedAt)
-	aiModel.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", aiModelCreatedAt)
-	aiModel.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", aiModelUpdatedAt)
-	exchange.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", exchangeCreatedAt)
-	exchange.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", exchangeUpdatedAt)
+	trader.CreatedAt = parseDBTime(traderCreatedAt)
+	trader.UpdatedAt = parseDBTime(traderUpdatedAt)
+	aiModel.CreatedAt = parseDBTime(aiModelCreatedAt)
+	aiModel.UpdatedAt = parseDBTime(aiModelUpdatedAt)
+	exchange.CreatedAt = parseDBTime(exchangeCreatedAt)
+	exchange.UpdatedAt = parseDBTime(exchangeUpdatedAt)
 
 	// Decrypt
 	aiModel.APIKey = s.decrypt(aiModel.APIKey)
@@ -414,8 +414,8 @@ func (s *TraderStore) getStrategyByID(userID, strategyID string) (*Strategy, err
 	if err != nil {
 		return nil, err
 	}
-	strategy.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-	strategy.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	strategy.CreatedAt = parseDBTime(createdAt)
+	strategy.UpdatedAt = parseDBTime(updatedAt)
 	return &strategy, nil
 }
 
@@ -433,8 +433,8 @@ func (s *TraderStore) getActiveOrDefaultStrategy(userID string) (*Strategy, erro
 		&strategy.IsActive, &strategy.IsDefault, &strategy.Config, &createdAt, &updatedAt,
 	)
 	if err == nil {
-		strategy.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-		strategy.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+		strategy.CreatedAt = parseDBTime(createdAt)
+		strategy.UpdatedAt = parseDBTime(updatedAt)
 		return &strategy, nil
 	}
 
@@ -449,8 +449,8 @@ func (s *TraderStore) getActiveOrDefaultStrategy(userID string) (*Strategy, erro
 	if err != nil {
 		return nil, err
 	}
-	strategy.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-	strategy.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	strategy.CreatedAt = parseDBTime(createdAt)
+	strategy.UpdatedAt = parseDBTime(updatedAt)
 	return &strategy, nil
 }
 
@@ -477,8 +477,8 @@ func (s *TraderStore) GetByID(traderID string) (*Trader, error) {
 	if err != nil {
 		return nil, err
 	}
-	t.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-	t.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	t.CreatedAt = parseDBTime(createdAt)
+	t.UpdatedAt = parseDBTime(updatedAt)
 	return &t, nil
 }
 
@@ -513,8 +513,8 @@ func (s *TraderStore) ListAll() ([]*Trader, error) {
 		if err != nil {
 			return nil, err
 		}
-		t.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-		t.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+		t.CreatedAt = parseDBTime(createdAt)
+		t.UpdatedAt = parseDBTime(updatedAt)
 		traders = append(traders, &t)
 	}
 	return traders, nil

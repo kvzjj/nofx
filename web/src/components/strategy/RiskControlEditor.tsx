@@ -1,4 +1,4 @@
-import { Shield, AlertTriangle } from 'lucide-react'
+import { Shield, AlertTriangle, TrendingDown } from 'lucide-react'
 import type { RiskControlConfig } from '../../types'
 
 interface RiskControlEditorProps {
@@ -36,8 +36,6 @@ export function RiskControlEditor({
       entryRequirements: { zh: '开仓要求', en: 'Entry Requirements' },
       minPositionSize: { zh: '最小开仓金额', en: 'Min Position Size' },
       minPositionSizeDesc: { zh: 'USDT 最小名义价值', en: 'Minimum notional value in USDT' },
-      minConfidence: { zh: '最小信心度', en: 'Min Confidence' },
-      minConfidenceDesc: { zh: 'AI 开仓信心度阈值', en: 'AI confidence threshold for entry' },
       orderExecution: { zh: '订单执行', en: 'Order Execution' },
       orderType: { zh: '开仓订单类型', en: 'Entry Order Type' },
       orderTypeDesc: { zh: '平仓仍使用市价单，避免限价平仓无法成交', en: 'Close orders still use market orders to avoid unfilled exits' },
@@ -299,6 +297,68 @@ export function RiskControlEditor({
         </div>
       </div>
 
+      {/* Trailing Profit Protection */}
+      <div>
+        <div className="flex items-center justify-between mb-4">
+          <div className="flex items-center gap-2">
+            <TrendingDown className="w-5 h-5" style={{ color: '#0ECB81' }} />
+            <h3 className="font-medium" style={{ color: '#EAECEF' }}>
+              {language === 'zh' ? '移动止盈保护（后台强制）' : 'Trailing Profit Protection (BACKEND ENFORCED)'}
+            </h3>
+          </div>
+          <label className="flex items-center gap-2 cursor-pointer">
+            <span className="text-xs" style={{ color: '#848E9C' }}>
+              {language === 'zh' ? '启用' : 'Enabled'}
+            </span>
+            <input
+              type="checkbox"
+              checked={config.enable_trailing_profit_exit ?? true}
+              onChange={(e) => updateField('enable_trailing_profit_exit', e.target.checked)}
+              disabled={disabled}
+              className="w-4 h-4 accent-green-500"
+            />
+          </label>
+        </div>
+        <p className="text-xs mb-3" style={{ color: '#848E9C' }}>
+          {language === 'zh'
+            ? '持仓浮盈达到触发阈值后，后台每分钟跟踪峰值；利润从峰值回撤超过回撤比例时立即市价平仓（可能在 AI 止盈价之前离场）。'
+            : 'Once unrealized profit reaches the trigger, the backend tracks the peak every minute and market-closes the position when profit retraces beyond the giveback ratio (may exit before your take_profit).'}
+        </p>
+        <div className="grid grid-cols-2 gap-4">
+          <div className="p-4 rounded-lg" style={{ background: '#0B0E11', border: '1px solid #2B3139' }}>
+            <label className="block text-sm mb-2" style={{ color: '#EAECEF' }}>
+              {language === 'zh' ? '触发阈值 (%)' : 'Trigger Threshold (%)'}
+            </label>
+            <input
+              type="number"
+              value={config.trailing_profit_trigger_pct ?? 5}
+              onChange={(e) => updateField('trailing_profit_trigger_pct', parseFloat(e.target.value) || 5)}
+              disabled={disabled || !(config.enable_trailing_profit_exit ?? true)}
+              min={0.1}
+              step={0.5}
+              className="w-28 px-3 py-2 rounded disabled:opacity-50"
+              style={{ background: '#1E2329', border: '1px solid #2B3139', color: '#EAECEF' }}
+            />
+          </div>
+          <div className="p-4 rounded-lg" style={{ background: '#0B0E11', border: '1px solid #2B3139' }}>
+            <label className="block text-sm mb-2" style={{ color: '#EAECEF' }}>
+              {language === 'zh' ? '峰值回撤平仓 (%)' : 'Giveback Close (%)'}
+            </label>
+            <input
+              type="number"
+              value={config.trailing_profit_giveback_pct ?? 40}
+              onChange={(e) => updateField('trailing_profit_giveback_pct', parseFloat(e.target.value) || 40)}
+              disabled={disabled || !(config.enable_trailing_profit_exit ?? true)}
+              min={1}
+              max={100}
+              step={1}
+              className="w-28 px-3 py-2 rounded disabled:opacity-50"
+              style={{ background: '#1E2329', border: '1px solid #2B3139', color: '#EAECEF' }}
+            />
+          </div>
+        </div>
+      </div>
+
       {/* Entry Requirements */}
       <div>
         <div className="flex items-center gap-2 mb-4">
@@ -338,34 +398,6 @@ export function RiskControlEditor({
               />
               <span className="ml-2" style={{ color: '#848E9C' }}>
                 USDT
-              </span>
-            </div>
-          </div>
-
-          <div
-            className="p-4 rounded-lg"
-            style={{ background: '#0B0E11', border: '1px solid #2B3139' }}
-          >
-            <label className="block text-sm mb-1" style={{ color: '#EAECEF' }}>
-              {t('minConfidence')}
-            </label>
-            <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
-              {t('minConfidenceDesc')}
-            </p>
-            <div className="flex items-center gap-2">
-              <input
-                type="range"
-                value={config.min_confidence ?? 75}
-                onChange={(e) =>
-                  updateField('min_confidence', parseInt(e.target.value))
-                }
-                disabled={disabled}
-                min={50}
-                max={100}
-                className="flex-1 accent-green-500"
-              />
-              <span className="w-12 text-center font-mono" style={{ color: '#0ECB81' }}>
-                {config.min_confidence ?? 75}
               </span>
             </div>
           </div>

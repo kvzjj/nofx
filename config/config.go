@@ -22,6 +22,13 @@ type Config struct {
 	// TransportEncryption enables browser-side encryption for API keys
 	// Requires HTTPS or localhost. Set to false for HTTP access via IP.
 	TransportEncryption bool
+
+	// Quantitative data service (fund flow / OI rankings).
+	// QuantDataAPIBase is the base URL of the data service; QuantDataAuthKey
+	// is its credential and MUST be provided via environment. It is never
+	// hardcoded so secrets do not leak through the open-source repo.
+	QuantDataAPIBase string
+	QuantDataAuthKey string
 }
 
 // Init initializes global configuration (from .env)
@@ -59,8 +66,17 @@ func Init() {
 	// Transport encryption: default false for easier deployment
 	// Set TRANSPORT_ENCRYPTION=true to enable (requires HTTPS or localhost)
 	if v := os.Getenv("TRANSPORT_ENCRYPTION"); v != "" {
-		cfg.TransportEncryption = strings.ToLower(v) == "true"
+		cfg.TransportEncryption = strings.EqualFold(strings.TrimSpace(v), "true")
 	}
+
+	// Quantitative data service. The base URL is not a secret and keeps its
+	// historical default; the auth key defaults to empty so quant data stays
+	// disabled until an operator explicitly configures a credential.
+	cfg.QuantDataAPIBase = "http://nofxaios.com:30006"
+	if v := strings.TrimSpace(os.Getenv("QUANT_DATA_API_BASE")); v != "" {
+		cfg.QuantDataAPIBase = v
+	}
+	cfg.QuantDataAuthKey = strings.TrimSpace(os.Getenv("QUANT_DATA_AUTH_KEY"))
 
 	global = cfg
 }

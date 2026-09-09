@@ -11,7 +11,6 @@ func TestParseFullDecisionResponseKeepsValidCloseWhenOpenIsInvalid(t *testing.T)
 	riskControl := store.RiskControlConfig{
 		BTCETHMaxLeverage:  10,
 		AltcoinMaxLeverage: 5,
-		MinConfidence:      70,
 		MinPositionSize:    10,
 		MinRiskRewardRatio: 2,
 	}
@@ -39,7 +38,6 @@ func TestParseFullDecisionResponseErrorsWhenAllDecisionsAreInvalid(t *testing.T)
 	riskControl := store.RiskControlConfig{
 		BTCETHMaxLeverage:  10,
 		AltcoinMaxLeverage: 5,
-		MinConfidence:      70,
 		MinPositionSize:    10,
 		MinRiskRewardRatio: 2,
 	}

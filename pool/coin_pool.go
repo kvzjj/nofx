@@ -3,9 +3,9 @@ package pool
 import (
 	"encoding/json"
 	"fmt"
-	"io/ioutil"
 	"log"
 	"net/http"
+	"nofx/netguard"
 	"os"
 	"path/filepath"
 	"strings"
@@ -148,9 +148,13 @@ func GetCoinPool() ([]CoinInfo, error) {
 func fetchCoinPool() ([]CoinInfo, error) {
 	log.Printf("🔄 Requesting AI500 coin pool...")
 
-	client := &http.Client{
-		Timeout: coinPoolConfig.Timeout,
+	if err := netguard.CheckURL(coinPoolConfig.APIURL); err != nil {
+		return nil, fmt.Errorf("coin pool URL rejected: %w", err)
 	}
+	client := netguard.NewClient(netguard.Options{
+		Timeout:      coinPoolConfig.Timeout,
+		AllowPrivate: netguard.AllowPrivateFromEnv(),
+	})
 
 	resp, err := client.Get(coinPoolConfig.APIURL)
 	if err != nil {
@@ -158,9 +162,9 @@ func fetchCoinPool() ([]CoinInfo, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := netguard.ReadLimited(resp.Body, netguard.ResponseSizeLimit(), "coin pool")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -210,7 +214,7 @@ func saveCoinPoolCache(coins []CoinInfo) error {
 	}
 
 	cachePath := filepath.Join(coinPoolConfig.CacheDir, "latest.json")
-	if err := ioutil.WriteFile(cachePath, data, 0644); err != nil {
+	if err := os.WriteFile(cachePath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write cache file: %w", err)
 	}
 
@@ -227,7 +231,7 @@ func loadCoinPoolCache() ([]CoinInfo, error) {
 		return nil, fmt.Errorf("cache file does not exist")
 	}
 
-	data, err := ioutil.ReadFile(cachePath)
+	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read cache file: %w", err)
 	}
@@ -472,9 +476,13 @@ func GetOITopPositions() ([]OIPosition, error) {
 func fetchOITop() ([]OIPosition, error) {
 	log.Printf("🔄 Requesting OI Top data...")
 
-	client := &http.Client{
-		Timeout: oiTopConfig.Timeout,
+	if err := netguard.CheckURL(oiTopConfig.APIURL); err != nil {
+		return nil, fmt.Errorf("OI Top URL rejected: %w", err)
 	}
+	client := netguard.NewClient(netguard.Options{
+		Timeout:      oiTopConfig.Timeout,
+		AllowPrivate: netguard.AllowPrivateFromEnv(),
+	})
 
 	resp, err := client.Get(oiTopConfig.APIURL)
 	if err != nil {
@@ -482,9 +490,9 @@ func fetchOITop() ([]OIPosition, error) {
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := netguard.ReadLimited(resp.Body, netguard.ResponseSizeLimit(), "OI Top")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read OI Top response: %w", err)
+		return nil, err
 	}
 
 	if resp.StatusCode != http.StatusOK {
@@ -528,7 +536,7 @@ func saveOITopCache(positions []OIPosition) error {
 	}
 
 	cachePath := filepath.Join(oiTopConfig.CacheDir, "oi_top_latest.json")
-	if err := ioutil.WriteFile(cachePath, data, 0644); err != nil {
+	if err := os.WriteFile(cachePath, data, 0644); err != nil {
 		return fmt.Errorf("failed to write OI Top cache file: %w", err)
 	}
 
@@ -544,7 +552,7 @@ func loadOITopCache() ([]OIPosition, error) {
 		return nil, fmt.Errorf("OI Top cache file does not exist")
 	}
 
-	data, err := ioutil.ReadFile(cachePath)
+	data, err := os.ReadFile(cachePath)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read OI Top cache file: %w", err)
 	}
@@ -644,18 +652,24 @@ func GetOIRankingData(baseURL, authKey string, duration string, limit int) (*OIR
 }
 
 // fetchOIRanking fetches OI ranking from a single endpoint
-func fetchOIRanking(url string) ([]OIPosition, string, error) {
-	client := &http.Client{Timeout: 30 * time.Second}
+func fetchOIRanking(requestURL string) ([]OIPosition, string, error) {
+	if err := netguard.CheckURL(requestURL); err != nil {
+		return nil, "", fmt.Errorf("OI ranking URL rejected: %w", err)
+	}
+	client := netguard.NewClient(netguard.Options{
+		Timeout:      30 * time.Second,
+		AllowPrivate: netguard.AllowPrivateFromEnv(),
+	})
 
-	resp, err := client.Get(url)
+	resp, err := client.Get(requestURL)
 	if err != nil {
 		return nil, "", fmt.Errorf("request failed: %w", err)
 	}
 	defer resp.Body.Close()
 
-	body, err := ioutil.ReadAll(resp.Body)
+	body, err := netguard.ReadLimited(resp.Body, netguard.ResponseSizeLimit(), "OI ranking")
 	if err != nil {
-		return nil, "", fmt.Errorf("failed to read response: %w", err)
+		return nil, "", err
 	}
 
 	if resp.StatusCode != http.StatusOK {

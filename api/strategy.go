@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"net/http"
 	"nofx/decision"
+	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
 	"nofx/store"
@@ -16,17 +17,9 @@ import (
 )
 
 // validateStrategyConfig validates strategy configuration and returns warnings
-func validateStrategyConfig(config *store.StrategyConfig) []string {
-	var warnings []string
-
-	// Validate quant data URL if enabled
-	if config.Indicators.EnableQuantData && config.Indicators.QuantDataAPIURL != "" {
-		if !strings.Contains(config.Indicators.QuantDataAPIURL, "{symbol}") {
-			warnings = append(warnings, "Quant data URL does not contain {symbol} placeholder. The same data will be used for all coins, which may not be correct.")
-		}
-	}
-
-	return warnings
+// plus errors. Errors reject the save; warnings are surfaced to the user.
+func validateStrategyConfig(config *store.StrategyConfig) (warnings []string, errs []string) {
+	return store.ValidateStrategyConfig(config)
 }
 
 // handleGetStrategies Get strategy list
@@ -119,6 +112,14 @@ func (s *Server) handleCreateStrategy(c *gin.Context) {
 	}
 	req.Config.ApplyDefaults()
 
+	// Reject configurations that violate hard limits (cross-field sanity,
+	// leverage caps, timeframe whitelist, SSRF-relevant URL checks, ...).
+	warnings, validationErrs := validateStrategyConfig(&req.Config)
+	if len(validationErrs) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy configuration", "validation_errors": validationErrs})
+		return
+	}
+
 	// Serialize configuration
 	configJSON, err := json.Marshal(req.Config)
 	if err != nil {
@@ -140,9 +141,6 @@ func (s *Server) handleCreateStrategy(c *gin.Context) {
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to create strategy: " + err.Error()})
 		return
 	}
-
-	// Validate configuration and collect warnings
-	warnings := validateStrategyConfig(&req.Config)
 
 	response := gin.H{
 		"id":      strategy.ID,
@@ -188,6 +186,14 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 	}
 	req.Config.ApplyDefaults()
 
+	// Reject configurations that violate hard limits; otherwise a running
+	// trader could be reloaded with values that make every entry fail.
+	warnings, validationErrs := validateStrategyConfig(&req.Config)
+	if len(validationErrs) > 0 {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Invalid strategy configuration", "validation_errors": validationErrs})
+		return
+	}
+
 	// Serialize configuration
 	configJSON, err := json.Marshal(req.Config)
 	if err != nil {
@@ -208,8 +214,15 @@ func (s *Server) handleUpdateStrategy(c *gin.Context) {
 		return
 	}
 
-	// Validate configuration and collect warnings
-	warnings := validateStrategyConfig(&req.Config)
+	// Reload affected traders so updated risk controls take effect immediately.
+	// Without this, running traders keep a stale in-memory copy of the config
+	// until the process restarts.
+	if reloadErr := s.traderManager.ReloadUserTradersFromStore(s.store, userID, func(t *store.Trader) bool {
+		return t.StrategyID == strategyID
+	}); reloadErr != nil {
+		logger.Warnf("⚠️ Strategy %s updated but trader reload failed: %v", strategyID, reloadErr)
+		warnings = append(warnings, "Strategy saved, but reloading affected traders failed: "+reloadErr.Error())
+	}
 
 	response := gin.H{"message": "Strategy updated successfully"}
 	if len(warnings) > 0 {
@@ -226,6 +239,24 @@ func (s *Server) handleDeleteStrategy(c *gin.Context) {
 
 	if userID == "" {
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Unauthorized"})
+		return
+	}
+
+	// Block deletion while the strategy is still referenced by traders,
+	// otherwise those traders fail to load on the next restart.
+	traders, err := s.store.Trader().List(userID)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to check trader references: " + err.Error()})
+		return
+	}
+	var referencing []string
+	for _, t := range traders {
+		if t.StrategyID == strategyID {
+			referencing = append(referencing, t.Name)
+		}
+	}
+	if len(referencing) > 0 {
+		c.JSON(http.StatusConflict, gin.H{"error": fmt.Sprintf("Strategy is used by trader(s): %s. Remove or reassign them first.", strings.Join(referencing, ", "))})
 		return
 	}
 
@@ -248,6 +279,11 @@ func (s *Server) handleActivateStrategy(c *gin.Context) {
 	}
 
 	if err := s.store.Strategy().SetActive(userID, strategyID); err != nil {
+		// Distinguish "not owned / not activatable" from real storage failures.
+		if strings.Contains(err.Error(), "not found or not owned") {
+			c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+			return
+		}
 		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to activate strategy: " + err.Error()})
 		return
 	}
@@ -440,7 +476,7 @@ func (s *Server) handleStrategyTestRun(c *gin.Context) {
 		klineCount = 30
 	}
 
-	fmt.Printf("📊 Using timeframes: %v, primary: %s, kline count: %d\n", timeframes, primaryTimeframe, klineCount)
+	logger.Infof("📊 Using timeframes: %v, primary: %s, kline count: %d", timeframes, primaryTimeframe, klineCount)
 
 	// Get real market data (using multiple timeframes)
 	marketDataMap := make(map[string]*market.Data)
@@ -448,7 +484,7 @@ func (s *Server) handleStrategyTestRun(c *gin.Context) {
 		data, err := market.GetWithTimeframes(coin.Symbol, timeframes, primaryTimeframe, klineCount)
 		if err != nil {
 			// If getting data for a coin fails, log but continue
-			fmt.Printf("⚠️  Failed to get market data for %s: %v\n", coin.Symbol, err)
+			logger.Infof("⚠️  Failed to get market data for %s: %v", coin.Symbol, err)
 			continue
 		}
 		marketDataMap[coin.Symbol] = data

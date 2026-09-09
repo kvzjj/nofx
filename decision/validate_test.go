@@ -12,7 +12,7 @@ func TestValidateDecisionIgnoresAISizingFields(t *testing.T) {
 		Leverage: 100, PositionSizeUSD: 1_000_000, RiskUSD: 1_000_000,
 		Confidence: 0, StopLoss: 90, TakeProfit: 130,
 	}
-	risk := store.RiskControlConfig{MinRiskRewardRatio: 3, BTCETHMaxLeverage: 5, MinConfidence: 99}
+	risk := store.RiskControlConfig{MinRiskRewardRatio: 3, BTCETHMaxLeverage: 5}
 	if err := validateDecision(&d, 10_000, risk, 100); err != nil {
 		t.Fatalf("AI sizing fields must not authorize or reject the intent: %v", err)
 	}

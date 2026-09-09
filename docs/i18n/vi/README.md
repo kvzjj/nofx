@@ -16,7 +16,7 @@
 ### Tính Năng Chính
 
 - **Hỗ trợ Đa AI**: Chạy DeepSeek, Qwen, GPT, Claude, Gemini, Grok, Kimi - chuyển đổi mô hình bất cứ lúc nào
-- **Đa Sàn Giao Dịch**: Giao dịch trên Binance, Bybit, OKX, Hyperliquid, Aster DEX, Lighter từ một nền tảng
+- **Binance Futures + giao dịch giả lập (Paper Trading)**: giao dịch thực trên Binance Futures, kèm sàn mô phỏng tích hợp (giá thị trường thực, khớp lệnh mô phỏng cục bộ) để xác thực chiến lược không rủi ro
 - **Strategy Studio**: Trình tạo chiến lược trực quan với nguồn coin, chỉ báo và kiểm soát rủi ro
 - **Chế Độ Thi Đấu AI**: Nhiều AI trader cạnh tranh theo thời gian thực, theo dõi hiệu suất song song
 - **Cấu Hình Web**: Không cần chỉnh sửa JSON - cấu hình mọi thứ qua giao diện web

@@ -672,6 +672,10 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 	case "binance":
 		traderConfig.BinanceAPIKey = exchangeCfg.APIKey
 		traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
+	case "paper":
+		// Simulated exchange: no credentials, fills come from the local
+		// matcher using real market prices.
+		logger.Infof("📒 Trader %s runs on the paper exchange (no API keys required)", traderCfg.Name)
 	default:
 		return fmt.Errorf("unsupported exchange type: %s", exchangeCfg.ExchangeType)
 	}

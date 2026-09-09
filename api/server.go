@@ -132,6 +132,7 @@ func (s *Server) setupRoutes() {
 			protected.POST("/traders/:id/stop", s.handleStopTrader)
 			protected.PUT("/traders/:id/prompt", s.handleUpdateTraderPrompt)
 			protected.POST("/traders/:id/sync-balance", s.handleSyncBalance)
+			protected.POST("/traders/:id/reset-paper", s.handleResetPaperAccount)
 			protected.POST("/traders/:id/close-position", s.handleClosePosition)
 			protected.PUT("/traders/:id/competition", s.handleToggleCompetition)
 
@@ -1000,6 +1001,50 @@ func (s *Server) handleToggleCompetition(c *gin.Context) {
 }
 
 // handleSyncBalance Sync exchange balance to initial_balance (Option B: Manual Sync + Option C: Smart Detection)
+// handleResetPaperAccount resets a trader's simulated (paper) account:
+// simulated positions, resting orders, and trade history are wiped and the
+// balance is restored to the trader's configured initial balance. Only
+// valid for traders bound to the "paper" exchange. A running trader is
+// reloaded (stopped + restarted) so the fresh state takes effect safely.
+func (s *Server) handleResetPaperAccount(c *gin.Context) {
+	userID := c.GetString("user_id")
+	traderID := c.Param("id")
+
+	full, err := s.store.Trader().GetFullConfig(userID, traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": "Trader does not exist or no access permission"})
+		return
+	}
+	if full.Exchange == nil || full.Exchange.ExchangeType != "paper" {
+		c.JSON(http.StatusBadRequest, gin.H{"error": "Only paper trading accounts can be reset"})
+		return
+	}
+
+	if err := s.store.Paper().ResetPaperState(traderID); err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{"error": "Failed to reset paper account: " + err.Error()})
+		return
+	}
+
+	// Reload the trader (stops it first via RemoveTrader) so a fresh PaperTrader
+	// is built from the empty state; it auto-restarts if it was running.
+	if err := s.traderManager.ReloadUserTradersFromStore(s.store, userID, func(t *store.Trader) bool {
+		return t.ID == traderID
+	}); err != nil {
+		logger.Warnf("⚠️ Paper account reset but trader reload failed: %v", err)
+		c.JSON(http.StatusOK, gin.H{
+			"message":         "Paper account reset, but reloading the trader failed; restart it manually",
+			"initial_balance": full.Trader.InitialBalance,
+		})
+		return
+	}
+
+	logger.Infof("📒 Paper account reset for trader %s (initial balance restored: %.2f USDT)", traderID, full.Trader.InitialBalance)
+	c.JSON(http.StatusOK, gin.H{
+		"message":         "Paper account reset successfully",
+		"initial_balance": full.Trader.InitialBalance,
+	})
+}
+
 func (s *Server) handleSyncBalance(c *gin.Context) {
 	userID := c.GetString("user_id")
 	traderID := c.Param("id")
@@ -1452,7 +1497,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 // CreateExchangeRequest request structure for creating a new exchange account
 type CreateExchangeRequest struct {
 	ExchangeType string `json:"exchange_type" binding:"required"` // "binance"
-	AccountName  string `json:"account_name"`                    // User-defined account name
+	AccountName  string `json:"account_name"`                     // User-defined account name
 	Enabled      bool   `json:"enabled"`
 	APIKey       string `json:"api_key"`
 	SecretKey    string `json:"secret_key"`

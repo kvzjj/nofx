@@ -14,6 +14,11 @@ import { getShortName } from './utils'
 // Supported exchange templates for creating new accounts
 const SUPPORTED_EXCHANGE_TEMPLATES = [
   { exchange_type: 'binance', name: 'Binance Futures', type: 'cex' as const },
+  {
+    exchange_type: 'paper',
+    name: 'Paper Trading (Simulated)',
+    type: 'sim' as const,
+  },
 ]
 
 interface ExchangeConfigModalProps {
@@ -184,11 +189,21 @@ export function ExchangeConfigModal({
 
     const exchangeId = editingExchangeId || null
     const exchangeType = currentExchangeType || ''
+    const isPaper = exchangeType === 'paper'
 
     setIsSaving(true)
     try {
-      if (!apiKey.trim() || !secretKey.trim()) return
-      await onSave(exchangeId, exchangeType, trimmedAccountName, apiKey.trim(), secretKey.trim(), '', testnet)
+      // Paper trading needs no credentials; every other exchange does.
+      if (!isPaper && (!apiKey.trim() || !secretKey.trim())) return
+      await onSave(
+        exchangeId,
+        exchangeType,
+        trimmedAccountName,
+        isPaper ? '' : apiKey.trim(),
+        isPaper ? '' : secretKey.trim(),
+        '',
+        isPaper ? false : testnet
+      )
     } finally {
       setIsSaving(false)
     }
@@ -417,7 +432,7 @@ export function ExchangeConfigModal({
                 )}
 
                 {/* 币安的输入字段 */}
-                {currentExchangeType === 'binance' && (
+                {currentExchangeType !== 'paper' && (
                     <>
                       {/* 币安用户配置提示 (D1 方案) */}
                       {currentExchangeType === 'binance' && (
@@ -562,6 +577,50 @@ export function ExchangeConfigModal({
                         />
                       </div>
 
+
+                      {currentExchangeType === 'paper' && (
+                        <div
+                          className="p-4 rounded"
+                          style={{
+                            background: 'rgba(14, 203, 129, 0.08)',
+                            border: '1px solid rgba(14, 203, 129, 0.25)',
+                          }}
+                        >
+                          <div
+                            className="text-sm font-semibold mb-2"
+                            style={{ color: '#0ECB81' }}
+                          >
+                            {language === 'zh'
+                              ? '📒 模拟盘：零风险验证策略'
+                              : '📒 Paper Trading: validate strategies risk-free'}
+                          </div>
+                          <ul
+                            className="text-xs space-y-1"
+                            style={{ color: '#848E9C' }}
+                          >
+                            <li>
+                              {language === 'zh'
+                                ? '• 使用真实行情价格本地模拟撮合，不需要 API Key，不发生真实下单'
+                                : '• Real market prices with locally simulated fills; no API keys, no real orders'}
+                            </li>
+                            <li>
+                              {language === 'zh'
+                                ? '• 市价单按当前价 ± 滑点成交，限价单/止损/止盈由后台撮合器触发'
+                                : '• Market orders fill at live price ± slippage; limit/SL/TP orders are triggered by the background matcher'}
+                            </li>
+                            <li>
+                              {language === 'zh'
+                                ? '• 初始资金由关联 Trader 的「初始余额」决定，模拟账户状态重启后保留'
+                                : '• Initial capital comes from the linked trader’s initial balance; simulated state survives restarts'}
+                            </li>
+                            <li>
+                              {language === 'zh'
+                                ? '• 资金费率未模拟，长期持仓的模拟盈亏略偏乐观'
+                                : '• Funding rates are not simulated; long-held positions read slightly optimistic'}
+                            </li>
+                          </ul>
+                        </div>
+                      )}
 
                       {/* Binance 白名单IP提示 */}
                       {currentExchangeType === 'binance' && (

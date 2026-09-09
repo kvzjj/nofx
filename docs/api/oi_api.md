@@ -25,7 +25,7 @@ GET /api/oi/top
 ### 完整示例
 
 ```
-http://nofxaios.com:30006/api/oi/top?auth=cm_568c67eae410d912c54c
+http://nofxaios.com:30006/api/oi/top?auth=YOUR_AUTH_KEY
 ```
 
 ### 参数
@@ -51,7 +51,7 @@ GET /api/oi/top-ranking
 ### 完整示例
 
 ```
-http://nofxaios.com:30006/api/oi/top-ranking?limit=50&duration=4h&auth=cm_568c67eae410d912c54c
+http://nofxaios.com:30006/api/oi/top-ranking?limit=50&duration=4h&auth=YOUR_AUTH_KEY
 ```
 
 ### 参数
@@ -75,7 +75,7 @@ GET /api/oi/low-ranking
 ### 完整示例
 
 ```
-http://nofxaios.com:30006/api/oi/low-ranking?limit=30&duration=24h&auth=cm_568c67eae410d912c54c
+http://nofxaios.com:30006/api/oi/low-ranking?limit=30&duration=24h&auth=YOUR_AUTH_KEY
 ```
 
 ### 参数
@@ -198,7 +198,7 @@ http://nofxaios.com:30006/api/oi/low-ranking?limit=30&duration=24h&auth=cm_568c6
 ### cURL
 
 ```bash
-curl -X GET "http://nofxaios.com:30006/api/oi/top-ranking?limit=50&duration=4h&auth=cm_568c67eae410d912c54c"
+curl -X GET "http://nofxaios.com:30006/api/oi/top-ranking?limit=50&duration=4h&auth=YOUR_AUTH_KEY"
 ```
 
 ### Python
@@ -210,7 +210,7 @@ url = "http://nofxaios.com:30006/api/oi/top-ranking"
 params = {
     "limit": 50,
     "duration": "4h",
-    "auth": "cm_568c67eae410d912c54c"
+    "auth": "YOUR_AUTH_KEY"
 }
 
 response = requests.get(url, params=params)
@@ -223,7 +223,7 @@ for pos in data['data']['positions']:
 ### JavaScript
 
 ```javascript
-const url = 'http://nofxaios.com:30006/api/oi/top-ranking?limit=50&duration=4h&auth=cm_568c67eae410d912c54c';
+const url = 'http://nofxaios.com:30006/api/oi/top-ranking?limit=50&duration=4h&auth=YOUR_AUTH_KEY';
 
 fetch(url)
   .then(response => response.json())

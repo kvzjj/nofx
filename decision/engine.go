@@ -3,12 +3,13 @@ package decision
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"math"
 	"net/http"
+	"nofx/config"
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/netguard"
 	"nofx/pool"
 	"nofx/store"
 	"regexp"
@@ -410,77 +411,6 @@ func (e *StrategyEngine) FetchMarketData(symbol string) (*market.Data, error) {
 	return market.Get(symbol)
 }
 
-// FetchExternalData fetches external data sources
-func (e *StrategyEngine) FetchExternalData() (map[string]interface{}, error) {
-	externalData := make(map[string]interface{})
-
-	for _, source := range e.config.Indicators.ExternalDataSources {
-		data, err := e.fetchSingleExternalSource(source)
-		if err != nil {
-			logger.Infof("⚠️  Failed to fetch external data source [%s]: %v", source.Name, err)
-			continue
-		}
-		externalData[source.Name] = data
-	}
-
-	return externalData, nil
-}
-
-func (e *StrategyEngine) fetchSingleExternalSource(source store.ExternalDataSource) (interface{}, error) {
-	client := &http.Client{
-		Timeout: time.Duration(source.RefreshSecs) * time.Second,
-	}
-	if client.Timeout == 0 {
-		client.Timeout = 30 * time.Second
-	}
-
-	req, err := http.NewRequest(source.Method, source.URL, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	for k, v := range source.Headers {
-		req.Header.Set(k, v)
-	}
-
-	resp, err := client.Do(req)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, err
-	}
-
-	var result interface{}
-	if err := json.Unmarshal(body, &result); err != nil {
-		return nil, err
-	}
-
-	if source.DataPath != "" {
-		result = extractJSONPath(result, source.DataPath)
-	}
-
-	return result, nil
-}
-
-func extractJSONPath(data interface{}, path string) interface{} {
-	parts := strings.Split(path, ".")
-	current := data
-
-	for _, part := range parts {
-		if m, ok := current.(map[string]interface{}); ok {
-			current = m[part]
-		} else {
-			return nil
-		}
-	}
-
-	return current
-}
-
 // FetchQuantData fetches quantitative data for a single coin
 func (e *StrategyEngine) FetchQuantData(symbol string) (*QuantData, error) {
 	if !e.config.Indicators.EnableQuantData || e.config.Indicators.QuantDataAPIURL == "" {
@@ -488,9 +418,15 @@ func (e *StrategyEngine) FetchQuantData(symbol string) (*QuantData, error) {
 	}
 
 	apiURL := e.config.Indicators.QuantDataAPIURL
+	if err := netguard.CheckURL(apiURL); err != nil {
+		return nil, fmt.Errorf("quant data URL rejected: %w", err)
+	}
 	url := strings.Replace(apiURL, "{symbol}", symbol, -1)
 
-	client := &http.Client{Timeout: 10 * time.Second}
+	client := netguard.NewClient(netguard.Options{
+		Timeout:      10 * time.Second,
+		AllowPrivate: netguard.AllowPrivateFromEnv(),
+	})
 	resp, err := client.Get(url)
 	if err != nil {
 		return nil, fmt.Errorf("request failed: %w", err)
@@ -501,9 +437,9 @@ func (e *StrategyEngine) FetchQuantData(symbol string) (*QuantData, error) {
 		return nil, fmt.Errorf("HTTP status code: %d", resp.StatusCode)
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := netguard.ReadLimited(resp.Body, netguard.ResponseSizeLimit(), "quant data")
 	if err != nil {
-		return nil, fmt.Errorf("failed to read response: %w", err)
+		return nil, err
 	}
 
 	var apiResp struct {
@@ -553,11 +489,11 @@ func (e *StrategyEngine) FetchOIRankingData() *pool.OIRankingData {
 
 	baseURL := indicators.OIRankingAPIURL
 	if baseURL == "" {
-		baseURL = "http://nofxaios.com:30006"
+		baseURL = config.Get().QuantDataAPIBase
 	}
 
-	// Get auth key from existing API URL or use default
-	authKey := "cm_568c67eae410d912c54c"
+	// The auth key is deployment configuration, never a hardcoded fallback.
+	authKey := ""
 	if indicators.QuantDataAPIURL != "" {
 		if idx := strings.Index(indicators.QuantDataAPIURL, "auth="); idx != -1 {
 			authKey = indicators.QuantDataAPIURL[idx+5:]
@@ -565,6 +501,13 @@ func (e *StrategyEngine) FetchOIRankingData() *pool.OIRankingData {
 				authKey = authKey[:ampIdx]
 			}
 		}
+	}
+	if authKey == "" {
+		authKey = config.Get().QuantDataAuthKey
+	}
+	if baseURL == "" || authKey == "" {
+		logger.Infof("⚠️ OI ranking data disabled: no data-service base URL or auth key configured")
+		return nil
 	}
 
 	duration := indicators.OIRankingDuration
@@ -621,12 +564,24 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	}
 
 	// 3. Hard constraints (risk control)
+	// Effective breaker values mirror AutoTrader.accountRiskLimits(): the
+	// strategy may only tighten the platform-wide constants, never loosen
+	// them, and unset values fall back to the constants.
+	effectiveDailyLoss := DailyLossHaltPct
+	if riskControl.MaxDailyLossPct > 0 && riskControl.MaxDailyLossPct < DailyLossHaltPct {
+		effectiveDailyLoss = riskControl.MaxDailyLossPct
+	}
+	effectiveDrawdown := AccountDrawdownHaltPct
+	if riskControl.MaxDrawdownPct > 0 && riskControl.MaxDrawdownPct < AccountDrawdownHaltPct {
+		effectiveDrawdown = riskControl.MaxDrawdownPct
+	}
+
 	sb.WriteString("# Hard Constraints (Risk Control)\n\n")
 	sb.WriteString("## CODE ENFORCED (Backend validation, cannot be bypassed):\n")
 	sb.WriteString(fmt.Sprintf("- Max Positions: %d coins simultaneously\n", riskControl.MaxPositions))
 	sb.WriteString(fmt.Sprintf("- Per-trade loss budget: ≤%.2f%% of account equity\n", PerTradeRiskPct))
 	sb.WriteString(fmt.Sprintf("- Aggregate open-position loss budget: ≤%.2f%% of account equity\n", MaxPortfolioRiskPct))
-	sb.WriteString(fmt.Sprintf("- Daily loss halt: %.2f%% | account drawdown halt: %.2f%%\n", DailyLossHaltPct, AccountDrawdownHaltPct))
+	sb.WriteString(fmt.Sprintf("- Daily loss halt: %.2f%% | account drawdown halt: %.2f%%\n", effectiveDailyLoss, effectiveDrawdown))
 	sb.WriteString(fmt.Sprintf("- Max Opening Order: ≤%.0f USDT notional (secondary cap)\n", riskControl.MaxPositionSize))
 	sb.WriteString(fmt.Sprintf("- Max Total Positions: ≤%.0f USDT notional (secondary cap)\n", riskControl.MaxTotalPositionSize))
 	sb.WriteString(fmt.Sprintf("- Min Position Size: ≥%.0f USDT\n\n", riskControl.MinPositionSize))
@@ -635,6 +590,11 @@ func (e *StrategyEngine) BuildSystemPrompt(accountEquity float64, variant string
 	sb.WriteString(fmt.Sprintf("- Backend-calculated leverage: Non-BTC/ETH instruments max %dx | BTC/ETH max %dx\n",
 		riskControl.AltcoinMaxLeverage, riskControl.BTCETHMaxLeverage))
 	sb.WriteString(fmt.Sprintf("- Risk-Reward Ratio: ≥1:%.1f (take_profit / stop_loss)\n", riskControl.MinRiskRewardRatio))
+	if riskControl.TrailingProfitExitEnabled() {
+		trailingTrigger, trailingGiveback := riskControl.TrailingProfitExitLevels()
+		sb.WriteString(fmt.Sprintf("- Trailing profit protection: once a position's profit ≥%.1f%%, the backend closes it if profit retraces %.0f%% from its peak (positions may close before your take_profit)\n",
+			trailingTrigger, trailingGiveback))
+	}
 	sb.WriteString("- The backend alone decides whether an entry is allowed and calculates quantity/leverage from equity, stop distance, ATR, liquidity, and margin\n")
 	sb.WriteString("- Do not output leverage, position_size_usd, risk_usd, or confidence\n\n")
 

@@ -4,7 +4,13 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"regexp"
+	"strings"
 	"time"
+
+	"nofx/config"
+	"nofx/netguard"
 )
 
 // StrategyStore strategy storage
@@ -13,6 +19,35 @@ type StrategyStore struct {
 }
 
 var defaultStaticCoins = []string{"BTCUSDT", "ETHUSDT", "SOLUSDT", "BNBUSDT", "XRPUSDT", "DOGEUSDT", "ADAUSDT", "HYPEUSDT"}
+
+// ValidTimeframes is the set of K-line intervals accepted in strategy configs.
+var ValidTimeframes = map[string]bool{
+	"1m": true, "3m": true, "5m": true, "15m": true, "30m": true,
+	"1h": true, "2h": true, "4h": true, "6h": true, "8h": true,
+	"12h": true, "1d": true, "3d": true, "1w": true,
+}
+
+// validOIRankingDurations mirrors the durations supported by the OI ranking API/UI.
+var validOIRankingDurations = map[string]bool{"1h": true, "4h": true, "24h": true}
+
+// Validation limits for strategy configurations. These are server-side caps;
+// the web UI applies tighter interactive hints but must not be the only guard.
+const (
+	maxStaticCoins          = 50
+	maxSelectedTimeframes   = 8
+	maxKlineCount           = 500
+	minKlineCount           = 10
+	maxIndicatorPeriods     = 6
+	maxIndicatorPeriodValue = 200
+	maxExchangeLeverage     = 125 // exchange-side hard limit for futures
+	warnLeverage            = 20
+	maxNotionalPerOrder     = 10_000_000
+	maxTotalNotional        = 100_000_000
+	maxExternalDataSources  = 10
+	maxPendingOrderTimeoutS = 86400
+)
+
+var validSymbolPattern = regexp.MustCompile(`^[A-Z0-9]{2,20}$`)
 
 // Strategy strategy configuration
 type Strategy struct {
@@ -139,7 +174,6 @@ type ExternalDataSource struct {
 // Risk Controls:
 //   - MinPositionSize: minimum position size in USDT (CODE ENFORCED)
 //   - MinRiskRewardRatio: minimum reward/risk ratio at the expected entry price (CODE ENFORCED)
-//   - MinConfidence: min AI confidence to open position (AI guided)
 //
 // Order Execution:
 //   - OrderType: "market" or "limit" for opening positions
@@ -162,8 +196,6 @@ type RiskControlConfig struct {
 
 	// Minimum reward/risk ratio at the expected entry price (CODE ENFORCED)
 	MinRiskRewardRatio float64 `json:"min_risk_reward_ratio"`
-	// Min AI confidence to open position (AI guided)
-	MinConfidence int `json:"min_confidence"`
 
 	// Account-level circuit breakers. All percentages are expressed as 0-100.
 	MaxDailyLossPct           float64 `json:"max_daily_loss_pct,omitempty"`
@@ -190,6 +222,41 @@ type RiskControlConfig struct {
 	ProtectionFailureAction string `json:"protection_failure_action,omitempty"`
 	// Percentage to close when ProtectionFailureAction is "reduce".
 	ProtectionFailureReducePct float64 `json:"protection_failure_reduce_pct,omitempty"`
+
+	// Trailing profit protection (backend-enforced, checked once per minute
+	// by the drawdown monitor, independent of AI decision cycles): once a
+	// position's leveraged unrealized profit reaches TrailingProfitTriggerPct,
+	// the backend tracks the peak and closes the position when profit falls
+	// TrailingProfitGivebackPct (relative) below that peak. Enabled by default
+	// to preserve historical behavior; set explicitly to false to disable.
+	EnableTrailingProfitExit *bool `json:"enable_trailing_profit_exit,omitempty"`
+	// Arm the trailing exit once unrealized profit ≥ this percent (default 5).
+	TrailingProfitTriggerPct float64 `json:"trailing_profit_trigger_pct,omitempty"`
+	// Close when profit retraces this percent from its peak (default 40).
+	TrailingProfitGivebackPct float64 `json:"trailing_profit_giveback_pct,omitempty"`
+}
+
+// TrailingProfitExitEnabled reports whether the trailing profit-protection
+// monitor should run. A missing pointer (older configs, or JSON omitting the
+// field) defaults to enabled so existing deployments keep their behavior.
+func (r RiskControlConfig) TrailingProfitExitEnabled() bool {
+	if r.EnableTrailingProfitExit == nil {
+		return true
+	}
+	return *r.EnableTrailingProfitExit
+}
+
+// TrailingProfitExitLevels returns the effective (trigger, giveback) pair,
+// substituting the historical defaults for unset values.
+func (r RiskControlConfig) TrailingProfitExitLevels() (trigger, giveback float64) {
+	trigger, giveback = r.TrailingProfitTriggerPct, r.TrailingProfitGivebackPct
+	if trigger <= 0 {
+		trigger = 5
+	}
+	if giveback <= 0 {
+		giveback = 40
+	}
+	return trigger, giveback
 }
 
 func (s *StrategyStore) initTables() error {
@@ -227,13 +294,50 @@ func (s *StrategyStore) initTables() error {
 }
 
 func (s *StrategyStore) initDefaultData() error {
-	// No longer pre-populate strategies - create on demand when user configures
-	return nil
+	// Seed the system default strategy so the GetActive fallback has a row to
+	// return on fresh installs. Idempotent: never clobbers an existing default.
+	var exists int
+	if err := s.db.QueryRow(`SELECT COUNT(*) FROM strategies WHERE is_default = 1`).Scan(&exists); err != nil {
+		return err
+	}
+	if exists > 0 {
+		return nil
+	}
+
+	defaultConfig := GetDefaultStrategyConfig("en")
+	strategy := &Strategy{
+		ID:        "default",
+		UserID:    "",
+		Name:      "Default Strategy",
+		IsActive:  false,
+		IsDefault: true,
+	}
+	if err := strategy.SetConfig(&defaultConfig); err != nil {
+		return err
+	}
+	_, err := s.db.Exec(`
+		INSERT INTO strategies (id, user_id, name, description, is_active, is_default, config)
+		VALUES (?, ?, ?, ?, ?, ?, ?)
+	`, strategy.ID, strategy.UserID, strategy.Name,
+		"System default strategy. Duplicate it to customize.",
+		strategy.IsActive, strategy.IsDefault, strategy.Config)
+	return err
 }
 
 // GetDefaultStrategyConfig returns the default strategy configuration for the given language
 func GetDefaultStrategyConfig(lang string) StrategyConfig {
-	config := StrategyConfig{
+	// Quant/OI-ranking data is enabled only when the deployment supplies a
+	// data-service credential via environment (QUANT_DATA_AUTH_KEY). The
+	// credential itself is never baked into this source file.
+	quantBase := config.Get().QuantDataAPIBase
+	quantKey := config.Get().QuantDataAuthKey
+	quantEnabled := quantBase != "" && quantKey != ""
+	var quantDataURL string
+	if quantEnabled {
+		quantDataURL = quantBase + "/api/coin/{symbol}?include=netflow,oi,price&auth=" + url.QueryEscape(quantKey)
+	}
+
+	cfg := StrategyConfig{
 		CoinSource: CoinSourceConfig{
 			SourceType:  "static",
 			StaticCoins: append([]string(nil), defaultStaticCoins...),
@@ -258,13 +362,13 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			EMAPeriods:         []int{20, 50},
 			RSIPeriods:         []int{7, 14},
 			ATRPeriods:         []int{14},
-			EnableQuantData:    true,
-			QuantDataAPIURL:    "http://nofxaios.com:30006/api/coin/{symbol}?include=netflow,oi,price&auth=cm_568c67eae410d912c54c",
-			EnableQuantOI:      true,
-			EnableQuantNetflow: true,
+			EnableQuantData:    quantEnabled,
+			QuantDataAPIURL:    quantDataURL,
+			EnableQuantOI:      quantEnabled,
+			EnableQuantNetflow: quantEnabled,
 			// OI ranking data - market-wide OI increase/decrease rankings
-			EnableOIRanking:   true,
-			OIRankingAPIURL:   "http://nofxaios.com:30006",
+			EnableOIRanking:   quantEnabled,
+			OIRankingAPIURL:   quantBase,
 			OIRankingDuration: "1h",
 			OIRankingLimit:    10,
 		},
@@ -276,7 +380,6 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			MaxTotalPositionSize:       3000, // Max 3,000 USDT total open notional
 			MinPositionSize:            12,   // Min 12 USDT per position (CODE ENFORCED)
 			MinRiskRewardRatio:         3.0,  // Min 3:1 profit/loss ratio (AI guided)
-			MinConfidence:              75,   // Min 75% confidence (AI guided)
 			OrderType:                  "market",
 			LimitPriceOffsetPct:        0.05,
 			ProtectionRetries:          3,
@@ -285,11 +388,16 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			PendingOrderPollSec:        2,
 			ProtectionFailureAction:    "close",
 			ProtectionFailureReducePct: 50,
+			// Trailing profit protection: preserve the historical always-on
+			// behavior as explicit, configurable defaults (enable pointer left
+			// nil = enabled).
+			TrailingProfitTriggerPct:  5,
+			TrailingProfitGivebackPct: 40,
 		},
 	}
 
 	if lang == "zh" {
-		config.PromptSections = PromptSectionsConfig{
+		cfg.PromptSections = PromptSectionsConfig{
 			RoleDefinition: `# 你是一个专业的加密市场多资产交易AI
 
 你的任务是根据提供的市场数据，交易加密原生资产以及加密交易场所上的代币化美股/美股挂钩永续合约。你擅长多时间框架分析、衍生品定价和风险管理。
@@ -320,7 +428,7 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 4. 输出简洁、可审计的决策依据，再输出结构化JSON`,
 		}
 	} else {
-		config.PromptSections = PromptSectionsConfig{
+		cfg.PromptSections = PromptSectionsConfig{
 			RoleDefinition: `# You are a professional multi-asset AI for crypto venues
 
 Trade both crypto-native assets and tokenized US equities or US-equity-linked perpetuals listed on crypto venues. You are skilled in multi-timeframe analysis, derivatives pricing, and risk management.
@@ -352,7 +460,7 @@ For equity-linked instruments also:
 		}
 	}
 
-	return config
+	return cfg
 }
 
 // Create create a strategy
@@ -413,8 +521,8 @@ func (s *StrategyStore) List(userID string) ([]*Strategy, error) {
 		if err != nil {
 			return nil, err
 		}
-		st.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-		st.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+		st.CreatedAt = parseDBTime(createdAt)
+		st.UpdatedAt = parseDBTime(updatedAt)
 		strategies = append(strategies, &st)
 	}
 	return strategies, nil
@@ -436,8 +544,8 @@ func (s *StrategyStore) Get(userID, id string) (*Strategy, error) {
 	if err != nil {
 		return nil, err
 	}
-	st.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-	st.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	st.CreatedAt = parseDBTime(createdAt)
+	st.UpdatedAt = parseDBTime(updatedAt)
 	return &st, nil
 }
 
@@ -461,8 +569,8 @@ func (s *StrategyStore) GetActive(userID string) (*Strategy, error) {
 	if err != nil {
 		return nil, err
 	}
-	st.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-	st.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	st.CreatedAt = parseDBTime(createdAt)
+	st.UpdatedAt = parseDBTime(updatedAt)
 	return &st, nil
 }
 
@@ -483,8 +591,8 @@ func (s *StrategyStore) GetDefault() (*Strategy, error) {
 	if err != nil {
 		return nil, err
 	}
-	st.CreatedAt, _ = time.Parse("2006-01-02 15:04:05", createdAt)
-	st.UpdatedAt, _ = time.Parse("2006-01-02 15:04:05", updatedAt)
+	st.CreatedAt = parseDBTime(createdAt)
+	st.UpdatedAt = parseDBTime(updatedAt)
 	return &st, nil
 }
 
@@ -497,16 +605,30 @@ func (s *StrategyStore) SetActive(userID, strategyID string) error {
 	}
 	defer tx.Rollback()
 
-	// first deactivate all strategies for the user
-	_, err = tx.Exec(`UPDATE strategies SET is_active = 0 WHERE user_id = ?`, userID)
+	// Deactivate all of the user's own strategies. Also clear any activation
+	// flag on shared system-default rows: older versions wrote is_active=1 on
+	// the global default row, which leaked per-user state across accounts.
+	_, err = tx.Exec(`UPDATE strategies SET is_active = 0 WHERE user_id = ? OR is_default = 1`, userID)
 	if err != nil {
 		return err
 	}
 
-	// activate specified strategy
-	_, err = tx.Exec(`UPDATE strategies SET is_active = 1 WHERE id = ? AND (user_id = ? OR is_default = 1)`, strategyID, userID)
+	// Only user-owned strategies can be activated. The system default row is
+	// shared by every account, so it must never carry a user's active flag;
+	// users duplicate it instead. RowsAffected detects silent no-op updates.
+	result, err := tx.Exec(`
+		UPDATE strategies SET is_active = 1
+		WHERE id = ? AND user_id = ? AND is_default = 0
+	`, strategyID, userID)
 	if err != nil {
 		return err
+	}
+	affected, err := result.RowsAffected()
+	if err != nil {
+		return err
+	}
+	if affected == 0 {
+		return fmt.Errorf("strategy not found or not owned by this user; duplicate the default strategy to customize it")
 	}
 
 	return tx.Commit()
@@ -549,6 +671,20 @@ func (config *StrategyConfig) ApplyDefaults() {
 	config.CoinSource.SourceType = "static"
 	if len(config.CoinSource.StaticCoins) == 0 {
 		config.CoinSource.StaticCoins = append([]string(nil), defaultStaticCoins...)
+	} else {
+		// Normalize (trim + uppercase) and drop duplicates so the AI prompt
+		// never lists the same instrument twice.
+		normalized := make([]string, 0, len(config.CoinSource.StaticCoins))
+		seen := make(map[string]bool, len(config.CoinSource.StaticCoins))
+		for _, coin := range config.CoinSource.StaticCoins {
+			c := strings.ToUpper(strings.TrimSpace(coin))
+			if c == "" || seen[c] {
+				continue
+			}
+			seen[c] = true
+			normalized = append(normalized, c)
+		}
+		config.CoinSource.StaticCoins = normalized
 	}
 	if config.RiskControl.OrderType == "" {
 		config.RiskControl.OrderType = "market"
@@ -585,6 +721,12 @@ func (config *StrategyConfig) ApplyDefaults() {
 	if config.RiskControl.ProtectionFailureReducePct <= 0 || config.RiskControl.ProtectionFailureReducePct > 100 {
 		config.RiskControl.ProtectionFailureReducePct = 50
 	}
+	if config.RiskControl.TrailingProfitTriggerPct <= 0 {
+		config.RiskControl.TrailingProfitTriggerPct = 5
+	}
+	if config.RiskControl.TrailingProfitGivebackPct <= 0 {
+		config.RiskControl.TrailingProfitGivebackPct = 40
+	}
 	if config.RiskControl.MaxPositionSize <= 0 {
 		config.RiskControl.MaxPositionSize = 1000
 	}
@@ -605,9 +747,6 @@ func (config *StrategyConfig) ApplyDefaults() {
 	}
 	if config.RiskControl.MinRiskRewardRatio <= 0 {
 		config.RiskControl.MinRiskRewardRatio = 3
-	}
-	if config.RiskControl.MinConfidence <= 0 {
-		config.RiskControl.MinConfidence = 75
 	}
 	if config.RiskControl.MaxDailyLossPct <= 0 {
 		config.RiskControl.MaxDailyLossPct = 1.5
@@ -641,4 +780,197 @@ func (s *Strategy) SetConfig(config *StrategyConfig) error {
 	}
 	s.Config = string(data)
 	return nil
+}
+
+// ValidateStrategyConfig performs server-side validation of a strategy config.
+// It returns user-facing warnings (configuration is saved despite them) and
+// errors (configuration is rejected). Call after ApplyDefaults so only
+// explicit user input beyond normalization is judged.
+func ValidateStrategyConfig(config *StrategyConfig) (warnings, errs []string) {
+	addW := func(format string, args ...interface{}) { warnings = append(warnings, fmt.Sprintf(format, args...)) }
+	addE := func(format string, args ...interface{}) { errs = append(errs, fmt.Sprintf(format, args...)) }
+
+	// ---- Coin source ----
+	coins := config.CoinSource.StaticCoins
+	if len(coins) > maxStaticCoins {
+		addE("static coin list exceeds %d entries", maxStaticCoins)
+	}
+	seen := make(map[string]bool)
+	for _, coin := range coins {
+		normalized := strings.ToUpper(strings.TrimSpace(coin))
+		if !validSymbolPattern.MatchString(normalized) {
+			addE("invalid coin symbol %q (allowed: 2-20 letters/digits)", coin)
+			continue
+		}
+		if seen[normalized] {
+			addW("duplicate coin %s in static list", normalized)
+		}
+		seen[normalized] = true
+	}
+
+	// ---- K-line configuration ----
+	k := config.Indicators.Klines
+	if !ValidTimeframes[k.PrimaryTimeframe] {
+		addE("primary timeframe %q is not supported", k.PrimaryTimeframe)
+	}
+	if k.PrimaryCount < minKlineCount || k.PrimaryCount > maxKlineCount {
+		addE("primary K-line count must be between %d and %d (got %d)", minKlineCount, maxKlineCount, k.PrimaryCount)
+	}
+	if k.LongerTimeframe != "" && !ValidTimeframes[k.LongerTimeframe] {
+		addE("longer timeframe %q is not supported", k.LongerTimeframe)
+	}
+	if k.LongerCount > maxKlineCount {
+		addE("longer timeframe K-line count must be at most %d (got %d)", maxKlineCount, k.LongerCount)
+	}
+	if len(k.SelectedTimeframes) > maxSelectedTimeframes {
+		addE("selected timeframes exceed %d entries", maxSelectedTimeframes)
+	}
+	primarySelected := false
+	for _, tf := range k.SelectedTimeframes {
+		if !ValidTimeframes[tf] {
+			addE("selected timeframe %q is not supported", tf)
+		}
+		if tf == k.PrimaryTimeframe {
+			primarySelected = true
+		}
+	}
+	if len(k.SelectedTimeframes) > 0 && k.PrimaryTimeframe != "" && !primarySelected {
+		addW("primary timeframe %s is not in the selected timeframes list", k.PrimaryTimeframe)
+	}
+
+	// ---- Indicator periods ----
+	validatePeriods := func(name string, periods []int) {
+		if len(periods) > maxIndicatorPeriods {
+			addE("%s accepts at most %d periods", name, maxIndicatorPeriods)
+		}
+		for _, p := range periods {
+			if p < 2 || p > maxIndicatorPeriodValue {
+				addE("%s period %d out of range 2-%d", name, p, maxIndicatorPeriodValue)
+			}
+		}
+	}
+	validatePeriods("EMA", config.Indicators.EMAPeriods)
+	validatePeriods("RSI", config.Indicators.RSIPeriods)
+	validatePeriods("ATR", config.Indicators.ATRPeriods)
+
+	// ---- Data source URLs (static scheme/host sanity; full SSRF guard at dial time) ----
+	if config.Indicators.EnableQuantData && config.Indicators.QuantDataAPIURL != "" {
+		if err := netguard.CheckURL(config.Indicators.QuantDataAPIURL); err != nil {
+			addE("quant data URL: %v", err)
+		}
+		if !strings.Contains(config.Indicators.QuantDataAPIURL, "{symbol}") {
+			addW("Quant data URL does not contain {symbol} placeholder. The same data will be used for all coins, which may not be correct.")
+		}
+	}
+	if config.Indicators.EnableOIRanking {
+		if config.Indicators.OIRankingAPIURL != "" {
+			if err := netguard.CheckURL(config.Indicators.OIRankingAPIURL); err != nil {
+				addE("OI ranking URL: %v", err)
+			}
+		}
+		if !validOIRankingDurations[config.Indicators.OIRankingDuration] {
+			addE("OI ranking duration %q is not supported (use 1h, 4h or 24h)", config.Indicators.OIRankingDuration)
+		}
+		if config.Indicators.OIRankingLimit < 1 || config.Indicators.OIRankingLimit > 50 {
+			addE("OI ranking limit must be between 1 and 50")
+		}
+	}
+	if len(config.Indicators.ExternalDataSources) > maxExternalDataSources {
+		addE("external data sources exceed %d entries", maxExternalDataSources)
+	}
+	for _, src := range config.Indicators.ExternalDataSources {
+		if err := netguard.CheckURL(src.URL); err != nil {
+			addE("external data source %q: %v", src.Name, err)
+		}
+		method := strings.ToUpper(strings.TrimSpace(src.Method))
+		if method != "GET" && method != "POST" {
+			addE("external data source %q: method must be GET or POST", src.Name)
+		}
+	}
+
+	// ---- Risk control ----
+	r := config.RiskControl
+	if r.MaxPositions < 1 || r.MaxPositions > 50 {
+		addE("max positions must be between 1 and 50 (got %d)", r.MaxPositions)
+	}
+	for _, lv := range []struct {
+		name string
+		val  int
+	}{{"btc_eth_max_leverage", r.BTCETHMaxLeverage}, {"altcoin_max_leverage", r.AltcoinMaxLeverage}} {
+		if lv.val < 1 || lv.val > maxExchangeLeverage {
+			addE("%s must be between 1 and %d (got %d)", lv.name, maxExchangeLeverage, lv.val)
+		} else if lv.val > warnLeverage {
+			addW("%s = %dx is aggressive; liquidation risk rises sharply at high leverage", lv.name, lv.val)
+		}
+	}
+	if r.MaxPositionSize <= 0 || r.MaxPositionSize > maxNotionalPerOrder {
+		addE("max_position_size must be between 1 and %d USDT", maxNotionalPerOrder)
+	}
+	if r.MaxTotalPositionSize <= 0 || r.MaxTotalPositionSize > maxTotalNotional {
+		addE("max_total_position_size must be between 1 and %d USDT", maxTotalNotional)
+	}
+	if r.MinPositionSize <= 0 {
+		addE("min_position_size must be greater than 0")
+	}
+	if r.MinPositionSize > r.MaxPositionSize {
+		addE("min_position_size (%.2f) exceeds max_position_size (%.2f); every entry would be rejected", r.MinPositionSize, r.MaxPositionSize)
+	}
+	if r.MaxPositionSize > r.MaxTotalPositionSize {
+		addE("max_position_size (%.2f) exceeds max_total_position_size (%.2f)", r.MaxPositionSize, r.MaxTotalPositionSize)
+	}
+	if r.MinRiskRewardRatio < 0.1 || r.MinRiskRewardRatio > 100 {
+		addE("min_risk_reward_ratio must be between 0.1 and 100")
+	}
+	for _, pv := range []struct {
+		name string
+		val  float64
+	}{{"max_daily_loss_pct", r.MaxDailyLossPct}, {"max_drawdown_pct", r.MaxDrawdownPct},
+		{"max_margin_usage_pct", r.MaxMarginUsagePct}, {"max_market_move_pct", r.MaxMarketMovePct}} {
+		if pv.val <= 0 || pv.val > 100 {
+			addE("%s must be between 0 and 100 (exclusive)", pv.name)
+		}
+	}
+	if r.MinLiquidationDistancePct <= 0 || r.MinLiquidationDistancePct > 100 {
+		addE("min_liquidation_distance_pct must be between 0 and 100 (exclusive)")
+	}
+	if r.MaxConsecutiveFailures < 0 || r.MaxConsecutiveFailures > 100 {
+		addE("max_consecutive_failures must be between 0 and 100")
+	}
+	if r.StopTradingMinutes < 0 || r.StopTradingMinutes > 10080 {
+		addE("stop_trading_minutes must be between 0 and 10080")
+	}
+	if r.OrderType != "market" && r.OrderType != "limit" {
+		addE("order_type must be \"market\" or \"limit\"")
+	}
+	if r.LimitPriceOffsetPct < 0 || r.LimitPriceOffsetPct > 10 {
+		addE("limit_price_offset_pct must be between 0 and 10")
+	}
+	if r.ProtectionRetries < 0 || r.ProtectionRetries > 20 {
+		addE("protection_retries must be between 0 and 20")
+	}
+	if r.ProtectionRetryDelayMs < 0 || r.ProtectionRetryDelayMs > 60000 {
+		addE("protection_retry_delay_ms must be between 0 and 60000")
+	}
+	if r.PendingOrderTimeoutSec > maxPendingOrderTimeoutS {
+		addE("pending_order_timeout_sec must be at most %d", maxPendingOrderTimeoutS)
+	}
+	if r.PendingOrderPollSec > 3600 {
+		addE("pending_order_poll_sec must be at most 3600")
+	}
+	switch r.ProtectionFailureAction {
+	case "close", "reduce", "keep_unprotected":
+	default:
+		addE("protection_failure_action must be close, reduce or keep_unprotected")
+	}
+	if r.ProtectionFailureReducePct <= 0 || r.ProtectionFailureReducePct > 100 {
+		addE("protection_failure_reduce_pct must be between 0 and 100 (exclusive)")
+	}
+	if r.TrailingProfitTriggerPct != 0 && (r.TrailingProfitTriggerPct < 0.1 || r.TrailingProfitTriggerPct > 1000) {
+		addE("trailing_profit_trigger_pct must be between 0.1 and 1000")
+	}
+	if r.TrailingProfitGivebackPct != 0 && (r.TrailingProfitGivebackPct < 1 || r.TrailingProfitGivebackPct > 100) {
+		addE("trailing_profit_giveback_pct must be between 1 and 100")
+	}
+
+	return warnings, errs
 }

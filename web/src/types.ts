@@ -115,7 +115,7 @@ export interface Exchange {
   exchange_type: string          // "binance"
   account_name: string           // User-defined account name
   name: string                   // Display name
-  type: 'cex' | 'dex'
+  type: 'cex' | 'dex' | 'sim'
   enabled: boolean
   apiKey?: string
   secretKey?: string
@@ -443,7 +443,6 @@ export interface RiskControlConfig {
   // Risk Parameters
   min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
   min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
-  min_confidence: number;          // Min AI confidence to open position (AI guided)
   max_daily_loss_pct?: number;     // Account daily mark-to-market loss circuit breaker
   max_drawdown_pct?: number;       // Equity high-water drawdown circuit breaker
   max_margin_usage_pct?: number;   // Projected account margin usage ceiling
@@ -455,4 +454,8 @@ export interface RiskControlConfig {
   limit_price_offset_pct?: number; // Limit order offset from current price in percent
   pending_order_timeout_sec?: number; // How long a resting limit entry is monitored before cancel
   pending_order_poll_sec?: number; // Status polling interval for pending limit entries
+  // Trailing profit protection (backend-enforced, once per minute)
+  enable_trailing_profit_exit?: boolean; // Default true; explicitly false disables
+  trailing_profit_trigger_pct?: number;  // Arm once leveraged unrealized profit ≥ this %
+  trailing_profit_giveback_pct?: number;  // Close when profit retraces this % from peak
 }

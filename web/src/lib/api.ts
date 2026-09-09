@@ -112,6 +112,14 @@ export const api = {
     if (!result.success) throw new Error('停止交易员失败')
   },
 
+  async resetPaperAccount(traderId: string): Promise<{ message: string; initial_balance: number }> {
+    const result = await httpClient.post<{ message: string; initial_balance: number }>(
+      `${API_BASE}/traders/${traderId}/reset-paper`
+    )
+    if (!result.success) throw new Error('重置模拟账户失败')
+    return result.data!
+  },
+
   async toggleCompetition(traderId: string, showInCompetition: boolean): Promise<void> {
     const result = await httpClient.put(
       `${API_BASE}/traders/${traderId}/competition`,

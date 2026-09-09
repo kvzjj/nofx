@@ -124,6 +124,70 @@ func (s *PositionStore) InitTables() error {
 		}
 	}
 
+	// Trailing profit-protection state: peak unrealized PnL per open
+	// position so the drawdown monitor survives restarts. Rows are keyed by
+	// trader+symbol+side and removed when the position closes or is superseded.
+	_, err = s.db.Exec(`
+		CREATE TABLE IF NOT EXISTS position_peak_pnl (
+			trader_id TEXT NOT NULL,
+			symbol TEXT NOT NULL,
+			side TEXT NOT NULL,
+			peak_pnl_pct REAL NOT NULL,
+			updated_at DATETIME NOT NULL,
+			PRIMARY KEY (trader_id, symbol, side)
+		)
+	`)
+	if err != nil {
+		return fmt.Errorf("failed to create position_peak_pnl table: %w", err)
+	}
+
+	return nil
+}
+
+// UpsertPeakPnL persists the peak PnL percentage for an open position.
+func (s *PositionStore) UpsertPeakPnL(traderID, symbol, side string, peakPnlPct float64) error {
+	_, err := s.db.Exec(`
+		INSERT INTO position_peak_pnl (trader_id, symbol, side, peak_pnl_pct, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(trader_id, symbol, side) DO UPDATE SET
+			peak_pnl_pct = excluded.peak_pnl_pct,
+			updated_at = excluded.updated_at
+	`, traderID, symbol, side, peakPnlPct, time.Now().UTC())
+	if err != nil {
+		return fmt.Errorf("failed to persist peak PnL for %s %s %s: %w", traderID, symbol, side, err)
+	}
+	return nil
+}
+
+// GetPeakPnLs returns persisted peak PnL percentages keyed by "SYMBOL_side".
+func (s *PositionStore) GetPeakPnLs(traderID string) (map[string]float64, error) {
+	rows, err := s.db.Query(`
+		SELECT symbol, side, peak_pnl_pct FROM position_peak_pnl WHERE trader_id = ?
+	`, traderID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query peak PnL for %s: %w", traderID, err)
+	}
+	defer rows.Close()
+
+	result := make(map[string]float64)
+	for rows.Next() {
+		var symbol, side string
+		var peak float64
+		if err := rows.Scan(&symbol, &side, &peak); err != nil {
+			return nil, err
+		}
+		result[strings.ToUpper(symbol)+"_"+strings.ToLower(side)] = peak
+	}
+	return result, rows.Err()
+}
+
+// DeletePeakPnL removes the persisted peak for a closed or superseded position.
+func (s *PositionStore) DeletePeakPnL(traderID, symbol, side string) error {
+	_, err := s.db.Exec(`DELETE FROM position_peak_pnl WHERE trader_id = ? AND symbol = ? AND side = ?`,
+		traderID, symbol, side)
+	if err != nil {
+		return fmt.Errorf("failed to delete peak PnL for %s %s %s: %w", traderID, symbol, side, err)
+	}
 	return nil
 }
 

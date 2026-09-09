@@ -249,7 +249,6 @@ func (cfg *BacktestConfig) ToStrategyConfig() *store.StrategyConfig {
 			MaxTotalPositionSize: 3000,
 			MinPositionSize:      12,
 			MinRiskRewardRatio:   3.0,
-			MinConfidence:        75,
 		},
 	}
 }

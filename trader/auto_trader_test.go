@@ -79,7 +79,7 @@ func (s *AutoTraderTestSuite) SetupTest() {
 		startTime:             time.Now(),
 		positionFirstSeenTime: make(map[string]int64),
 		stopMonitorCh:         make(chan struct{}),
-		peakPnLCache:          make(map[string]float64),
+		peakPnLCache:          make(map[string]peakPnLEntry),
 		userID:                "test_user",
 	}
 }
@@ -170,6 +170,49 @@ func (s *AutoTraderTestSuite) TestPeakPnLCache() {
 	s.autoTrader.ClearPeakPnLCache("BTCUSDT", "long")
 	_, exists := s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"]
 	s.False(exists, "cleared key must not exist")
+}
+
+func (s *AutoTraderTestSuite) TestPeakPnLCacheKeyNormalization() {
+	// Mixed-case symbol/side must land on the same cache key.
+	s.autoTrader.UpdatePeakPnL(" btcusdt ", "LONG", 9.0)
+	s.Equal(9.0, s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"])
+
+	s.autoTrader.ClearPeakPnLCache("BTCUSDT", "Long")
+	_, exists := s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"]
+	s.False(exists, "normalized clear must remove the entry")
+}
+
+func (s *AutoTraderTestSuite) TestCheckPositionDrawdownDisabledByStrategy() {
+	off := false
+	original := s.strategyCfg.RiskControl.EnableTrailingProfitExit
+	s.strategyCfg.RiskControl.EnableTrailingProfitExit = &off
+	defer func() { s.strategyCfg.RiskControl.EnableTrailingProfitExit = original }()
+
+	// This position/peak combination would trigger an emergency close when
+	// the monitor is enabled (profit 6%% ≥ 5%%, drawdown 40%%).
+	s.mockTrader.positions = []map[string]interface{}{
+		{"symbol": "BTCUSDT", "side": "long", "positionAmt": 0.1, "entryPrice": 50000.0, "markPrice": 50300.0, "leverage": 10.0},
+	}
+	s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 10.0)
+
+	s.autoTrader.checkPositionDrawdown()
+
+	_, exists := s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"]
+	s.True(exists, "disabled monitor must not close positions or touch peak state")
+}
+
+func (s *AutoTraderTestSuite) TestCheckPositionDrawdownMissingLeverageDefaultsTo1x() {
+	// No leverage field: PnL%% must be computed at 1x (0.6%%), far below the
+	// 5%% trigger, so no emergency close happens even with a high cached peak.
+	s.mockTrader.positions = []map[string]interface{}{
+		{"symbol": "BTCUSDT", "side": "long", "positionAmt": 0.1, "entryPrice": 50000.0, "markPrice": 50300.0},
+	}
+	s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 10.0)
+
+	s.autoTrader.checkPositionDrawdown()
+
+	_, exists := s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"]
+	s.True(exists, "1x fallback must not trigger an emergency close")
 }
 
 // ============================================================
