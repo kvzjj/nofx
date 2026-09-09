@@ -2,6 +2,8 @@ package auth
 
 import (
 	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"log"
 	"sync"
@@ -25,12 +27,37 @@ var tokenBlacklist = struct {
 // maxBlacklistEntries is the maximum capacity threshold for blacklist
 const maxBlacklistEntries = 100_000
 
+// TokenStore is an optional persistent backend for the token blacklist.
+// When set, blacklisted tokens survive process restarts.
+type TokenStore interface {
+	// BlacklistToken persists a revoked token hash until exp.
+	BlacklistToken(tokenHash string, exp time.Time) error
+	// IsTokenBlacklisted reports whether the token hash is revoked.
+	IsTokenBlacklisted(tokenHash string) (bool, error)
+}
+
+// persistentTokens is the optional persistent blacklist backend.
+var persistentTokens TokenStore
+
+// SetTokenStore installs a persistent blacklist backend (write-through with
+// read fallback). Passing nil reverts to memory-only operation.
+func SetTokenStore(ts TokenStore) {
+	persistentTokens = ts
+}
+
 // OTPIssuer is the OTP issuer name
 const OTPIssuer = "nofxAI"
 
 // SetJWTSecret sets the JWT secret key
 func SetJWTSecret(secret string) {
 	JWTSecret = []byte(secret)
+}
+
+// hashToken derives the storage key for a raw token. Only the hash is
+// persisted so the blacklist table never contains usable credentials.
+func hashToken(token string) string {
+	sum := sha256.Sum256([]byte(token))
+	return hex.EncodeToString(sum[:])
 }
 
 // BlacklistToken adds token to blacklist until expiration
@@ -52,6 +79,13 @@ func BlacklistToken(token string, exp time.Time) {
 				len(tokenBlacklist.items), maxBlacklistEntries)
 		}
 	}
+
+	// Write-through to the persistent store so revocation survives restarts.
+	if persistentTokens != nil {
+		if err := persistentTokens.BlacklistToken(hashToken(token), exp); err != nil {
+			log.Printf("auth: persist blacklist entry failed: %v", err)
+		}
+	}
 }
 
 // IsTokenBlacklisted checks if token is in blacklist (auto cleanup on expiration)
@@ -64,6 +98,14 @@ func IsTokenBlacklisted(token string) bool {
 			return false
 		}
 		return true
+	}
+
+	// Memory miss: consult the persistent store (restart scenario).
+	if persistentTokens != nil {
+		revoked, err := persistentTokens.IsTokenBlacklisted(hashToken(token))
+		if err == nil && revoked {
+			return true
+		}
 	}
 	return false
 }

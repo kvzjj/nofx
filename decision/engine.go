@@ -9,6 +9,7 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/metrics"
 	"nofx/netguard"
 	"nofx/pool"
 	"nofx/store"
@@ -279,6 +280,7 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 	aiCallStart := time.Now()
 	aiResponse, err := mcpClient.CallWithMessages(systemPrompt, userPrompt)
 	aiCallDuration := time.Since(aiCallStart)
+	metrics.NotifyAICall(aiCallDuration, err != nil)
 	if err != nil {
 		return nil, fmt.Errorf("AI API call failed: %w", err)
 	}
@@ -303,6 +305,7 @@ func GetFullDecisionWithStrategy(ctx *Context, mcpClient mcp.AIClient, engine *S
 		return decision, fmt.Errorf("failed to parse AI response: %w", err)
 	}
 
+	metrics.DecisionsTotal.Inc()
 	return decision, nil
 }
 

@@ -8,6 +8,8 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/metrics"
+	"nofx/notification"
 	"nofx/store"
 	"strconv"
 	"strings"
@@ -1012,22 +1014,38 @@ func (at *AutoTrader) buildOpenOrderOptions(side string, currentPrice float64) O
 
 func (at *AutoTrader) openLong(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
 	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
-		return advanced.OpenLongWithOptions(symbol, quantity, leverage, options)
+		order, err := advanced.OpenLongWithOptions(symbol, quantity, leverage, options)
+		at.recordOrderMetrics(err)
+		return order, err
 	}
 	if options.Type == OrderTypeLimit {
 		logger.Infof("  ⚠️ %s does not support configurable order type, falling back to market order", at.exchange)
 	}
-	return at.trader.OpenLong(symbol, quantity, leverage)
+	order, err := at.trader.OpenLong(symbol, quantity, leverage)
+	at.recordOrderMetrics(err)
+	return order, err
 }
 
 func (at *AutoTrader) openShort(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
 	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
-		return advanced.OpenShortWithOptions(symbol, quantity, leverage, options)
+		order, err := advanced.OpenShortWithOptions(symbol, quantity, leverage, options)
+		at.recordOrderMetrics(err)
+		return order, err
 	}
 	if options.Type == OrderTypeLimit {
 		logger.Infof("  ⚠️ %s does not support configurable order type, falling back to market order", at.exchange)
 	}
-	return at.trader.OpenShort(symbol, quantity, leverage)
+	order, err := at.trader.OpenShort(symbol, quantity, leverage)
+	at.recordOrderMetrics(err)
+	return order, err
+}
+
+// recordOrderMetrics tracks exchange order submission outcomes.
+func (at *AutoTrader) recordOrderMetrics(err error) {
+	metrics.OrdersTotal.Inc()
+	if err != nil {
+		metrics.OrderFailures.Inc()
+	}
 }
 
 // executeOpenLongWithRecord executes open long position and records detailed information
@@ -2007,6 +2025,15 @@ func (at *AutoTrader) logBackendForcedAction(symbol, action, orderID string, act
 	if err := at.saveDecision(record); err != nil {
 		logger.Warnf("⚠️ [%s] failed to save backend-forced action record: %v", at.name, err)
 	}
+
+	// Trading notification: trailing-profit protection acts on the user's
+	// position without AI involvement, so it must always be surfaced.
+	severity := notification.SeverityWarning
+	if actionErr != nil {
+		severity = notification.SeverityCritical
+	}
+	at.publishPositionEvent(notification.EventTakeProfitHit, severity, symbol,
+		fmt.Sprintf("🛡 Trailing profit protection: %s", symbol), reason)
 }
 
 func errString(err error) string {
@@ -2789,6 +2816,26 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 	return true
 }
 
+// publishPositionEvent emits a trading notification event to the global bus.
+// It never blocks or panics the trading loop; a nil bus target is tolerated.
+func (at *AutoTrader) publishPositionEvent(eventType string, severity notification.Severity, symbol, title, body string) {
+	e := &notification.Event{
+		EventType:  eventType,
+		Severity:   severity,
+		UserID:     at.userID,
+		TraderID:   at.id,
+		TraderName: at.name,
+		Symbol:     symbol,
+		Title:      title,
+		Body:       body,
+		Time:       time.Now().UTC(),
+	}
+	if e.Title != "" {
+		e.Title = at.name + ": " + e.Title
+	}
+	notification.Publish(e)
+}
+
 // recordPositionChange records position change (create record on open, update record on close)
 func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string, quantity, price float64, leverage int, entryPrice float64, fee float64) {
 	if at.store == nil {
@@ -2816,6 +2863,9 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 			logger.Infof("  ⚠️ Failed to record position: %v", err)
 		} else {
 			logger.Infof("  📊 Position recorded [%s] %s %s @ %.4f", at.id[:8], symbol, side, price)
+			at.publishPositionEvent(notification.EventPositionOpened, notification.SeverityInfo, symbol,
+				fmt.Sprintf("📈 Opened %s %s", strings.ToLower(side), symbol),
+				fmt.Sprintf("Quantity: %.4f @ %.4f, Leverage: %dx", quantity, price, leverage))
 		}
 
 	case "close_long", "close_short":
@@ -2846,6 +2896,9 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 				logger.Errorf("  Failed to record partial close: %v", err)
 			} else {
 				logger.Warnf("  Position partially closed [%s] %s %s: closed=%.8f remaining=%.8f", at.id, symbol, side, closedQuantity, remainingQuantity)
+				at.publishPositionEvent(notification.EventPartialClose, notification.SeverityInfo, symbol,
+					fmt.Sprintf("〰️ Partially closed %s %s (%+.2f USDT)", strings.ToLower(side), symbol, realizedPnL),
+					fmt.Sprintf("Closed: %.4f, Remaining: %.4f, P&L: %+.2f USDT", closedQuantity, remainingQuantity, realizedPnL))
 			}
 			return
 		}
@@ -2864,6 +2917,23 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 		} else {
 			logger.Infof("  📊 Position closed [%s] %s %s @ %.4f → %.4f, P&L: %.2f, Fee: %.4f",
 				at.id[:8], symbol, side, openPos.EntryPrice, price, realizedPnL, fee)
+			severity := notification.SeverityInfo
+			emoji := "✅"
+			if realizedPnL < 0 {
+				severity = notification.SeverityWarning
+				emoji = "🔻"
+			}
+			pnlPct := 0.0
+			if openPos.EntryPrice > 0 && openPos.Leverage > 0 {
+				pnlPct = ((price - openPos.EntryPrice) / openPos.EntryPrice) * float64(openPos.Leverage)
+				if side == "SHORT" {
+					pnlPct = -pnlPct
+				}
+			}
+			at.publishPositionEvent(notification.EventPositionClosed, severity, symbol,
+				fmt.Sprintf("%s Closed %s %s (%+.2f USDT)", emoji, strings.ToLower(side), symbol, realizedPnL),
+				fmt.Sprintf("Entry: %.4f → Exit: %.4f, P&L: %+.2f USDT (%+.2f%%), Fee: %.4f",
+					openPos.EntryPrice, price, realizedPnL, pnlPct, fee))
 		}
 	}
 }
@@ -3028,6 +3098,9 @@ func (at *AutoTrader) triggerRiskLocked(reason string) {
 	if until.After(at.stopUntil) {
 		at.stopUntil = until
 		logger.Warnf("🚨 [RISK CONTROL] %s triggered; new entries paused until %s", reason, until.Format(time.RFC3339))
+		at.publishPositionEvent(notification.EventRiskTriggered, notification.SeverityCritical, "",
+			fmt.Sprintf("🚨 Risk control triggered: %s", reason),
+			fmt.Sprintf("New entries paused until %s", until.Format("2006-01-02 15:04 MST")))
 	}
 }
 

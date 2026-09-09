@@ -12,6 +12,7 @@ import (
 	"nofx/crypto"
 	"nofx/logger"
 	"nofx/manager"
+	"nofx/metrics"
 	"nofx/store"
 	"nofx/trader"
 	"strings"
@@ -30,6 +31,11 @@ type Server struct {
 	backtestManager *backtest.Manager
 	httpServer      *http.Server
 	port            int
+
+	// P0/P1 infrastructure
+	rateLimits  *rateLimiters          // per-IP / per-user rate limiting
+	metricsToken string                // optional bearer token for /api/metrics
+	backupSvc   *store.BackupService   // scheduled DB backups
 }
 
 // NewServer Creates API server
@@ -42,6 +48,9 @@ func NewServer(traderManager *manager.TraderManager, st *store.Store, cryptoServ
 	// Enable CORS
 	router.Use(corsMiddleware())
 
+	// HTTP request metrics (latency / count) for every route
+	router.Use(metrics.HTTPMiddleware())
+
 	// Create crypto handler
 	cryptoHandler := NewCryptoHandler(cryptoService)
 
@@ -52,6 +61,8 @@ func NewServer(traderManager *manager.TraderManager, st *store.Store, cryptoServ
 		cryptoHandler:   cryptoHandler,
 		backtestManager: backtestManager,
 		port:            port,
+		rateLimits:      newRateLimiters(),
+		metricsToken:    config.Get().MetricsToken,
 	}
 
 	// Setup routes
@@ -87,35 +98,47 @@ func (s *Server) setupRoutes() {
 		// Admin login (used in admin mode, public)
 
 		// System supported models and exchanges (no authentication required)
-		api.GET("/supported-models", s.handleGetSupportedModels)
-		api.GET("/supported-exchanges", s.handleGetSupportedExchanges)
+		api.GET("/supported-models", s.rateLimits.publicRateLimit(), s.handleGetSupportedModels)
+		api.GET("/supported-exchanges", s.rateLimits.publicRateLimit(), s.handleGetSupportedExchanges)
 
 		// System config (no authentication required, for frontend to determine admin mode/registration status)
-		api.GET("/config", s.handleGetSystemConfig)
+		api.GET("/config", s.rateLimits.publicRateLimit(), s.handleGetSystemConfig)
 
 		// Crypto related endpoints (no authentication required)
-		api.GET("/crypto/config", s.cryptoHandler.HandleGetCryptoConfig)
-		api.GET("/crypto/public-key", s.cryptoHandler.HandleGetPublicKey)
-		api.POST("/crypto/decrypt", s.cryptoHandler.HandleDecryptSensitiveData)
+		api.GET("/crypto/config", s.rateLimits.publicRateLimit(), s.cryptoHandler.HandleGetCryptoConfig)
+		api.GET("/crypto/public-key", s.rateLimits.publicRateLimit(), s.cryptoHandler.HandleGetPublicKey)
+		api.POST("/crypto/decrypt", s.rateLimits.publicRateLimit(), s.handleCryptoDecryptAudited)
+
+		// Prometheus metrics (token-gated when METRICS_TOKEN is set)
+		if s.metricsToken != "" {
+			api.GET("/metrics", s.handleMetrics)
+		}
 
 		// Public competition data (no authentication required)
-		api.GET("/traders", s.handlePublicTraderList)
-		api.GET("/competition", s.handlePublicCompetition)
-		api.GET("/top-traders", s.handleTopTraders)
-		api.GET("/equity-history", s.handleEquityHistory)
-		api.POST("/equity-history-batch", s.handleEquityHistoryBatch)
-		api.GET("/traders/:id/public-config", s.handleGetPublicTraderConfig)
+		api.GET("/traders", s.rateLimits.publicRateLimit(), s.handlePublicTraderList)
+		api.GET("/competition", s.rateLimits.publicRateLimit(), s.handlePublicCompetition)
+		api.GET("/top-traders", s.rateLimits.publicRateLimit(), s.handleTopTraders)
+		api.GET("/equity-history", s.rateLimits.publicRateLimit(), s.handleEquityHistory)
+		api.POST("/equity-history-batch", s.rateLimits.publicRateLimit(), s.handleEquityHistoryBatch)
+		api.GET("/traders/:id/public-config", s.rateLimits.publicRateLimit(), s.handleGetPublicTraderConfig)
 
-		// Authentication related routes (no authentication required)
-		api.POST("/register", s.handleRegister)
-		api.POST("/login", s.handleLogin)
-		api.POST("/verify-otp", s.handleVerifyOTP)
-		api.POST("/complete-registration", s.handleCompleteRegistration)
-		api.POST("/reset-password", s.handleResetPassword)
+		// Authentication related routes (no authentication required, strict
+		// per-IP rate limiting against brute force)
+		authLimiter := s.rateLimits.authRateLimit()
+		api.POST("/register", authLimiter, s.handleRegister)
+		api.POST("/login", authLimiter, s.handleLogin)
+		api.POST("/verify-otp", authLimiter, s.handleVerifyOTP)
+		api.POST("/complete-registration", authLimiter, s.handleCompleteRegistration)
+		api.POST("/reset-password", authLimiter, s.handleResetPassword)
 
 		// Routes requiring authentication
-		protected := api.Group("/", s.authMiddleware())
+		protected := api.Group("/", s.authMiddleware(), s.rateLimits.userRateLimit())
 		{
+			// Prometheus metrics without token configured
+			if s.metricsToken == "" {
+				protected.GET("/metrics", s.handleMetrics)
+			}
+
 			// Logout (add to blacklist)
 			protected.POST("/logout", s.handleLogout)
 
@@ -162,6 +185,21 @@ func (s *Server) setupRoutes() {
 			protected.DELETE("/strategies/:id", s.handleDeleteStrategy)
 			protected.POST("/strategies/:id/activate", s.handleActivateStrategy)
 			protected.POST("/strategies/:id/duplicate", s.handleDuplicateStrategy)
+
+			// Audit log (own user's events)
+			protected.GET("/audit-logs", s.handleGetAuditLogs)
+
+			// Notifications (in-app history + channel settings)
+			protected.GET("/notifications", s.handleGetNotifications)
+			protected.POST("/notifications/read-all", s.handleMarkAllNotificationsRead)
+			protected.POST("/notifications/:id/read", s.handleMarkNotificationRead)
+			protected.GET("/notification-settings", s.handleGetNotificationSettings)
+			protected.PUT("/notification-settings", s.handleUpdateNotificationSettings)
+			protected.POST("/notification-settings/test", s.handleTestNotification)
+
+			// Backup management
+			protected.POST("/backups", s.handleTriggerBackup)
+			protected.GET("/backups", s.handleListBackups)
 
 			// Data for specified trader (using query parameter ?trader_id=xxx)
 			protected.GET("/status", s.handleStatus)
@@ -608,6 +646,8 @@ func (s *Server) handleCreateTrader(c *gin.Context) {
 
 	logger.Infof("✓ Trader created successfully: %s (model: %s, exchange: %s)", req.Name, req.AIModelID, req.ExchangeID)
 
+	s.audit(c, store.AuditActionTraderCreate, "trader", traderID, "success", fmt.Sprintf("name=%s model=%s exchange=%s", req.Name, req.AIModelID, req.ExchangeID))
+
 	c.JSON(http.StatusCreated, gin.H{
 		"trader_id":   traderID,
 		"trader_name": req.Name,
@@ -811,6 +851,8 @@ func (s *Server) handleDeleteTrader(c *gin.Context) {
 	// Remove trader from memory
 	s.traderManager.RemoveTrader(traderID)
 
+	s.audit(c, store.AuditActionTraderDelete, "trader", traderID, "success", "")
+
 	logger.Infof("✓ Trader deleted: %s", traderID)
 	c.JSON(http.StatusOK, gin.H{"message": "Trader deleted"})
 }
@@ -893,6 +935,8 @@ func (s *Server) handleStartTrader(c *gin.Context) {
 		logger.Infof("⚠️  Failed to update trader status: %v", err)
 	}
 
+	s.audit(c, store.AuditActionTraderStart, "trader", traderID, "success", "trader "+trader.GetName()+" started")
+
 	logger.Infof("✓ Trader %s started", trader.GetName())
 	c.JSON(http.StatusOK, gin.H{"message": "Trader started"})
 }
@@ -931,6 +975,7 @@ func (s *Server) handleStopTrader(c *gin.Context) {
 	}
 
 	logger.Infof("⏹  Trader %s stopped", trader.GetName())
+	s.audit(c, store.AuditActionTraderStop, "trader", traderID, "success", "trader "+trader.GetName()+" stopped")
 	c.JSON(http.StatusOK, gin.H{"message": "Trader stopped"})
 }
 
@@ -1043,6 +1088,7 @@ func (s *Server) handleResetPaperAccount(c *gin.Context) {
 	}
 
 	logger.Infof("📒 Paper account reset for trader %s (initial balance restored: %.2f USDT)", traderID, full.Trader.InitialBalance)
+	s.audit(c, store.AuditActionResetPaper, "trader", traderID, "success", fmt.Sprintf("paper reset to %.2f USDT", full.Trader.InitialBalance))
 	c.JSON(http.StatusOK, gin.H{
 		"message":         "Paper account reset successfully",
 		"initial_balance": full.Trader.InitialBalance,
@@ -1140,6 +1186,7 @@ func (s *Server) handleSyncBalance(c *gin.Context) {
 
 	logger.Infof("✅ Synced balance: %.2f → %.2f USDT (%s %.2f%%)", oldBalance, actualBalance, changeType, changePercent)
 
+	s.audit(c, store.AuditActionSyncBalance, "trader", c.Param("id"), "success", fmt.Sprintf("balance %.2f -> %.2f USDT (%.2f%%)", oldBalance, actualBalance, changePercent))
 	c.JSON(http.StatusOK, gin.H{
 		"message":        "Balance synced successfully",
 		"old_balance":    oldBalance,
@@ -1219,6 +1266,7 @@ func (s *Server) handleClosePosition(c *gin.Context) {
 	}
 
 	logger.Infof("✅ Position closed successfully: symbol=%s, side=%s, result=%v", req.Symbol, req.Side, result)
+	s.audit(c, store.AuditActionClosePosition, "trader", traderID, "success", fmt.Sprintf("manual close %s %s", req.Symbol, req.Side))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Position closed successfully",
 		"symbol":  req.Symbol,
@@ -1364,6 +1412,7 @@ func (s *Server) handleUpdateModelConfigs(c *gin.Context) {
 	}
 
 	logger.Infof("✓ AI model config updated: %+v", req.Models)
+	s.audit(c, store.AuditActionModelUpdate, "model", "", "success", fmt.Sprintf("%d model(s) updated", len(req.Models)))
 	c.JSON(http.StatusOK, gin.H{"message": "Model configuration updated"})
 }
 
@@ -1495,6 +1544,7 @@ func (s *Server) handleUpdateExchangeConfigs(c *gin.Context) {
 	}
 
 	logger.Infof("✓ Exchange config updated: %+v", req.Exchanges)
+	s.audit(c, store.AuditActionExchangeUpdate, "exchange", "", "success", fmt.Sprintf("%d exchange(s) updated", len(req.Exchanges)))
 	c.JSON(http.StatusOK, gin.H{"message": "Exchange configuration updated"})
 }
 
@@ -1577,6 +1627,7 @@ func (s *Server) handleCreateExchange(c *gin.Context) {
 	}
 
 	logger.Infof("✓ Created exchange account: type=%s, name=%s, id=%s", req.ExchangeType, req.AccountName, id)
+	s.audit(c, store.AuditActionExchangeCreate, "exchange", id, "success", fmt.Sprintf("type=%s name=%s", req.ExchangeType, req.AccountName))
 	c.JSON(http.StatusOK, gin.H{
 		"message": "Exchange account created",
 		"id":      id,
@@ -1620,6 +1671,7 @@ func (s *Server) handleDeleteExchange(c *gin.Context) {
 	}
 
 	logger.Infof("✓ Deleted exchange account: id=%s", exchangeID)
+	s.audit(c, store.AuditActionExchangeDelete, "exchange", exchangeID, "success", "")
 	c.JSON(http.StatusOK, gin.H{"message": "Exchange account deleted"})
 }
 
@@ -2045,6 +2097,7 @@ func (s *Server) handleLogout(c *gin.Context) {
 		exp = time.Now().Add(24 * time.Hour)
 	}
 	auth.BlacklistToken(tokenString, exp)
+	s.audit(c, store.AuditActionLogout, "user", claims.UserID, "success", "")
 	c.JSON(http.StatusOK, gin.H{"message": "Logged out"})
 }
 
@@ -2219,18 +2272,22 @@ func (s *Server) handleLogin(c *gin.Context) {
 		return
 	}
 
-	// Get user information
+	// Audit context for this attempt: user identity resolved below.
 	user, err := s.store.User().GetByEmail(req.Email)
 	if err != nil {
+		s.auditIdentified(c, req.Email, store.AuditActionLoginFailed, "user", req.Email, "failure", "unknown email")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Email or password incorrect"})
 		return
 	}
 
 	// Verify password
 	if !auth.CheckPassword(req.Password, user.PasswordHash) {
+		s.auditIdentified(c, req.Email, store.AuditActionLoginFailed, "user", user.ID, "failure", "wrong password")
 		c.JSON(http.StatusUnauthorized, gin.H{"error": "Email or password incorrect"})
 		return
 	}
+
+	s.auditIdentified(c, req.Email, store.AuditActionLogin, "user", user.ID, "success", "password verified, OTP required")
 
 	// Check if OTP is verified
 	if !user.OTPVerified {
@@ -2272,9 +2329,12 @@ func (s *Server) handleVerifyOTP(c *gin.Context) {
 
 	// Verify OTP
 	if !auth.VerifyOTP(user.OTPSecret, req.OTPCode) {
+		s.auditIdentified(c, user.Email, store.AuditActionOTPFailed, "user", user.ID, "failure", "wrong OTP code")
 		c.JSON(http.StatusBadRequest, gin.H{"error": "Verification code error"})
 		return
 	}
+
+	s.auditIdentified(c, user.Email, store.AuditActionOTPVerify, "user", user.ID, "success", "OTP verified, token issued")
 
 	// Generate JWT token
 	token, err := auth.GenerateJWT(user.ID, user.Email)
@@ -2331,6 +2391,8 @@ func (s *Server) handleResetPassword(c *gin.Context) {
 		return
 	}
 
+	s.auditIdentified(c, user.Email, store.AuditActionPasswordReset, "user", user.ID, "success", "password reset via OTP")
+
 	logger.Infof("✓ User %s password has been reset", user.Email)
 	c.JSON(http.StatusOK, gin.H{"message": "Password reset successful, please login with new password"})
 }
@@ -2368,6 +2430,11 @@ func (s *Server) handleGetSupportedExchanges(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, supportedExchanges)
+}
+
+// SetBackupService wires the backup service for manual trigger endpoints.
+func (s *Server) SetBackupService(bs *store.BackupService) {
+	s.backupSvc = bs
 }
 
 // Start Start server

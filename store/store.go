@@ -19,9 +19,24 @@ const dbTimeLayout = "2006-01-02 15:04:05"
 
 // parseDBTime parses a SQLite timestamp as UTC, returning the zero time on
 // malformed input (mirroring the previous `t, _ = time.Parse(...)` behavior).
+// dbTimeLayouts covers every timestamp shape the driver may return:
+// CURRENT_TIMESTAMP emits "2006-01-02 15:04:05", while bound time.Time (and
+// even pre-formatted strings in TIMESTAMP-affinity columns) may be normalized
+// by modernc.org/sqlite to RFC3339 "2006-01-02T15:04:05Z".
+var dbTimeLayouts = []string{
+	dbTimeLayout,
+	time.RFC3339Nano,
+	time.RFC3339,
+	"2006-01-02T15:04:05",
+}
+
 func parseDBTime(value string) time.Time {
-	t, _ := time.ParseInLocation(dbTimeLayout, value, time.UTC)
-	return t
+	for _, layout := range dbTimeLayouts {
+		if t, err := time.ParseInLocation(layout, value, time.UTC); err == nil {
+			return t
+		}
+	}
+	return time.Time{}
 }
 
 // Store unified data storage interface
@@ -40,6 +55,9 @@ type Store struct {
 	strategy  *StrategyStore
 	paper     *PaperStore
 	equity    *EquityStore
+	audit     *AuditStore
+	notification *NotificationStore
+	tokenBlacklist *TokenBlacklistStore
 
 	// Encryption functions
 	encryptFunc func(string) string
@@ -126,6 +144,9 @@ func (s *Store) SetCryptoFuncs(encrypt, decrypt func(string) string) {
 	if s.trader != nil {
 		s.trader.decryptFunc = decrypt
 	}
+	if s.notification != nil {
+		s.notification.SetCryptoFuncs(encrypt, decrypt)
+	}
 }
 
 // initTables initializes all database tables
@@ -163,6 +184,20 @@ func (s *Store) initTables() error {
 	}
 	if err := s.Equity().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize equity tables: %w", err)
+	}
+	if err := s.Audit().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize audit tables: %w", err)
+	}
+	if err := s.Notification().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize notification tables: %w", err)
+	}
+	if err := s.TokenBlacklist().initTables(); err != nil {
+		return fmt.Errorf("failed to initialize token blacklist tables: %w", err)
+	}
+
+	// Apply versioned migrations (records schema_migrations baseline).
+	if err := RunMigrations(s.db); err != nil {
+		return fmt.Errorf("failed to run migrations: %w", err)
 	}
 	return nil
 }
@@ -306,6 +341,36 @@ func (s *Store) Equity() *EquityStore {
 		s.equity = &EquityStore{db: s.db}
 	}
 	return s.equity
+}
+
+// Audit gets audit log storage
+func (s *Store) Audit() *AuditStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.audit == nil {
+		s.audit = &AuditStore{db: s.db}
+	}
+	return s.audit
+}
+
+// Notification gets notification storage
+func (s *Store) Notification() *NotificationStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notification == nil {
+		s.notification = &NotificationStore{db: s.db, encryptFunc: s.encryptFunc, decryptFunc: s.decryptFunc}
+	}
+	return s.notification
+}
+
+// TokenBlacklist gets persistent token blacklist storage
+func (s *Store) TokenBlacklist() *TokenBlacklistStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.tokenBlacklist == nil {
+		s.tokenBlacklist = &TokenBlacklistStore{db: s.db}
+	}
+	return s.tokenBlacklist
 }
 
 // Close closes database connection

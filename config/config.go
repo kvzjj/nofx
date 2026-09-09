@@ -29,6 +29,28 @@ type Config struct {
 	// hardcoded so secrets do not leak through the open-source repo.
 	QuantDataAPIBase string
 	QuantDataAuthKey string
+
+	// API rate limiting (requests per minute).
+	RateLimitEnabled       bool
+	RateLimitAuthPerMin    int // login / register / OTP / password reset, per IP
+	RateLimitPublicPerMin  int // unauthenticated endpoints, per IP
+	RateLimitUserPerMin    int // authenticated endpoints, per user
+	RateLimitSensitivePerMin int // crypto/decrypt and similar, per IP
+
+	// Metrics endpoint: when METRICS_TOKEN is set, /api/metrics requires it
+	// (Bearer or ?token=); otherwise authenticated users can scrape.
+	MetricsToken string
+
+	// Scheduled SQLite backups.
+	BackupEnabled        bool
+	BackupDir            string
+	BackupIntervalHours  int
+	BackupRetentionCount int
+
+	// Audit log retention in days (0 = keep forever).
+	AuditRetentionDays int
+	// Notification history retention in days (0 = keep forever).
+	NotificationRetentionDays int
 }
 
 // Init initializes global configuration (from .env)
@@ -78,7 +100,65 @@ func Init() {
 	}
 	cfg.QuantDataAuthKey = strings.TrimSpace(os.Getenv("QUANT_DATA_AUTH_KEY"))
 
+	// ---- Rate limiting -------------------------------------------------
+	// Enabled by default: credential endpoints must be brute-force resistant.
+	cfg.RateLimitEnabled = true
+	if v := os.Getenv("RATE_LIMIT_ENABLED"); v != "" {
+		cfg.RateLimitEnabled = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	cfg.RateLimitAuthPerMin = envInt("RATE_LIMIT_AUTH_PER_MIN", 10)
+	cfg.RateLimitPublicPerMin = envInt("RATE_LIMIT_PUBLIC_PER_MIN", 240)
+	cfg.RateLimitUserPerMin = envInt("RATE_LIMIT_USER_PER_MIN", 600)
+	cfg.RateLimitSensitivePerMin = envInt("RATE_LIMIT_SENSITIVE_PER_MIN", 30)
+	if cfg.RateLimitAuthPerMin < 1 {
+		cfg.RateLimitAuthPerMin = 1
+	}
+	if cfg.RateLimitPublicPerMin < 1 {
+		cfg.RateLimitPublicPerMin = 1
+	}
+	if cfg.RateLimitUserPerMin < 1 {
+		cfg.RateLimitUserPerMin = 1
+	}
+	if cfg.RateLimitSensitivePerMin < 1 {
+		cfg.RateLimitSensitivePerMin = 1
+	}
+
+	// ---- Metrics --------------------------------------------------------
+	cfg.MetricsToken = strings.TrimSpace(os.Getenv("METRICS_TOKEN"))
+
+	// ---- Backups ---------------------------------------------------------
+	cfg.BackupEnabled = true
+	if v := os.Getenv("BACKUP_ENABLED"); v != "" {
+		cfg.BackupEnabled = strings.EqualFold(strings.TrimSpace(v), "true")
+	}
+	cfg.BackupDir = strings.TrimSpace(os.Getenv("BACKUP_DIR"))
+	if cfg.BackupDir == "" {
+		cfg.BackupDir = "data/backups"
+	}
+	cfg.BackupIntervalHours = envInt("BACKUP_INTERVAL_HOURS", 24)
+	if cfg.BackupIntervalHours < 1 {
+		cfg.BackupIntervalHours = 24
+	}
+	cfg.BackupRetentionCount = envInt("BACKUP_RETENTION_COUNT", 7)
+	if cfg.BackupRetentionCount < 1 {
+		cfg.BackupRetentionCount = 1
+	}
+
+	// ---- Retention -------------------------------------------------------
+	cfg.AuditRetentionDays = envInt("AUDIT_RETENTION_DAYS", 180)
+	cfg.NotificationRetentionDays = envInt("NOTIFICATION_RETENTION_DAYS", 90)
+
 	global = cfg
+}
+
+// envInt reads an integer env var with a default.
+func envInt(key string, def int) int {
+	if v := strings.TrimSpace(os.Getenv(key)); v != "" {
+		if n, err := strconv.Atoi(v); err == nil {
+			return n
+		}
+	}
+	return def
 }
 
 // Get returns the global configuration

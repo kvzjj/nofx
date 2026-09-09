@@ -406,6 +406,47 @@ func (s *PositionStore) GetClosedPositions(traderID string, limit int) ([]*Trade
 	return s.scanPositions(rows)
 }
 
+// ListClosedBetween returns closed positions of a trader whose exit falls in
+// [from, to). exit_time is stored as RFC3339 with local offsets, so a wide
+// SQL window is fetched and precise filtering happens in Go.
+func (s *PositionStore) ListClosedBetween(traderID string, from, to time.Time) ([]*TraderPosition, error) {
+	// 48h buffer covers any realistic UTC offset in RFC3339 strings.
+	wideFrom := from.Add(-48 * time.Hour)
+	rows, err := s.db.Query(`
+		SELECT id, trader_id, exchange_id, COALESCE(exchange_type, '') as exchange_type, symbol, side, quantity, entry_price, entry_order_id,
+			entry_time, exit_price, exit_order_id, exit_time, realized_pnl, fee,
+			leverage, status, protection_status, close_reason, created_at, updated_at
+		FROM trader_positions
+		WHERE trader_id = ? AND status = 'CLOSED' AND exit_time IS NOT NULL
+			AND exit_time >= ? AND exit_time < ?
+		ORDER BY exit_time ASC
+		LIMIT 2000
+	`, traderID, wideFrom.UTC().Format(time.RFC3339), to.Add(48*time.Hour).UTC().Format(time.RFC3339))
+	if err != nil {
+		return nil, fmt.Errorf("failed to query closed positions between: %w", err)
+	}
+	defer rows.Close()
+
+	all, err := s.scanPositions(rows)
+	if err != nil {
+		return nil, err
+	}
+	filtered := make([]*TraderPosition, 0, len(all))
+	for _, p := range all {
+		if p.ExitTime != nil && !p.ExitTime.Before(from) && p.ExitTime.Before(to) {
+			filtered = append(filtered, p)
+		}
+	}
+	return filtered, nil
+}
+
+// CountAllOpen returns the number of open positions across all traders.
+func (s *PositionStore) CountAllOpen() (int, error) {
+	var count int
+	err := s.db.QueryRow(`SELECT COUNT(*) FROM trader_positions WHERE status = 'OPEN'`).Scan(&count)
+	return count, err
+}
+
 // GetAllOpenPositions gets all traders' open positions (for global sync)
 func (s *PositionStore) GetAllOpenPositions() ([]*TraderPosition, error) {
 	rows, err := s.db.Query(`

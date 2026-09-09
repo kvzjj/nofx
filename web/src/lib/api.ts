@@ -22,6 +22,10 @@ import type {
   BacktestRunMetadata,
   Strategy,
   StrategyConfig,
+  NotificationRecord,
+  NotificationSettings,
+  AuditEvent,
+  BackupRecord,
 } from '../types'
 import { CryptoService } from './crypto'
 import { httpClient } from './httpClient'
@@ -78,9 +82,7 @@ export const api = {
   },
 
   async getPerformance(traderId?: string): Promise<any> {
-    const query = traderId
-      ? `?trader_id=${encodeURIComponent(traderId)}`
-      : ''
+    const query = traderId ? `?trader_id=${encodeURIComponent(traderId)}` : ''
     const result = await httpClient.get<any>(`${API_BASE}/performance${query}`)
     if (!result.success) throw new Error('获取交易表现失败')
     return result.data!
@@ -112,15 +114,21 @@ export const api = {
     if (!result.success) throw new Error('停止交易员失败')
   },
 
-  async resetPaperAccount(traderId: string): Promise<{ message: string; initial_balance: number }> {
-    const result = await httpClient.post<{ message: string; initial_balance: number }>(
-      `${API_BASE}/traders/${traderId}/reset-paper`
-    )
+  async resetPaperAccount(
+    traderId: string
+  ): Promise<{ message: string; initial_balance: number }> {
+    const result = await httpClient.post<{
+      message: string
+      initial_balance: number
+    }>(`${API_BASE}/traders/${traderId}/reset-paper`)
     if (!result.success) throw new Error('重置模拟账户失败')
     return result.data!
   },
 
-  async toggleCompetition(traderId: string, showInCompetition: boolean): Promise<void> {
+  async toggleCompetition(
+    traderId: string,
+    showInCompetition: boolean
+  ): Promise<void> {
     const result = await httpClient.put(
       `${API_BASE}/traders/${traderId}/competition`,
       { show_in_competition: showInCompetition }
@@ -128,7 +136,11 @@ export const api = {
     if (!result.success) throw new Error('更新竞技场显示设置失败')
   },
 
-  async closePosition(traderId: string, symbol: string, side: string): Promise<{ message: string }> {
+  async closePosition(
+    traderId: string,
+    symbol: string,
+    side: string
+  ): Promise<{ message: string }> {
     const result = await httpClient.post<{ message: string }>(
       `${API_BASE}/traders/${traderId}/close-position`,
       { symbol, side }
@@ -251,20 +263,30 @@ export const api = {
   },
 
   // 创建新的交易所账户
-  async createExchange(request: CreateExchangeRequest): Promise<{ id: string }> {
-    const result = await httpClient.post<{ id: string }>(`${API_BASE}/exchanges`, request)
+  async createExchange(
+    request: CreateExchangeRequest
+  ): Promise<{ id: string }> {
+    const result = await httpClient.post<{ id: string }>(
+      `${API_BASE}/exchanges`,
+      request
+    )
     if (!result.success) throw new Error('创建交易所账户失败')
     return result.data!
   },
 
   // 创建新的交易所账户（加密传输）
-  async createExchangeEncrypted(request: CreateExchangeRequest): Promise<{ id: string }> {
+  async createExchangeEncrypted(
+    request: CreateExchangeRequest
+  ): Promise<{ id: string }> {
     // 检查是否启用了传输加密
     const config = await CryptoService.fetchCryptoConfig()
 
     if (!config.transport_encryption) {
       // 传输加密禁用时，直接发送明文
-      const result = await httpClient.post<{ id: string }>(`${API_BASE}/exchanges`, request)
+      const result = await httpClient.post<{ id: string }>(
+        `${API_BASE}/exchanges`,
+        request
+      )
       if (!result.success) throw new Error('创建交易所账户失败')
       return result.data!
     }
@@ -297,7 +319,9 @@ export const api = {
 
   // 删除交易所账户
   async deleteExchange(exchangeId: string): Promise<void> {
-    const result = await httpClient.delete(`${API_BASE}/exchanges/${exchangeId}`)
+    const result = await httpClient.delete(
+      `${API_BASE}/exchanges/${exchangeId}`
+    )
     if (!result.success) throw new Error('删除交易所账户失败')
   },
 
@@ -487,7 +511,9 @@ export const api = {
     return handleJSONResponse<BacktestRunsResponse>(res)
   },
 
-  async startBacktest(config: BacktestStartConfig): Promise<BacktestRunMetadata> {
+  async startBacktest(
+    config: BacktestStartConfig
+  ): Promise<BacktestRunMetadata> {
     const res = await fetch(`${API_BASE}/backtest/start`, {
       method: 'POST',
       headers: getAuthHeaders(),
@@ -639,26 +665,34 @@ export const api = {
 
   // Strategy APIs
   async getStrategies(): Promise<Strategy[]> {
-    const result = await httpClient.get<{ strategies: Strategy[] }>(`${API_BASE}/strategies`)
+    const result = await httpClient.get<{ strategies: Strategy[] }>(
+      `${API_BASE}/strategies`
+    )
     if (!result.success) throw new Error('获取策略列表失败')
     const strategies = result.data?.strategies
     return Array.isArray(strategies) ? strategies : []
   },
 
   async getStrategy(strategyId: string): Promise<Strategy> {
-    const result = await httpClient.get<Strategy>(`${API_BASE}/strategies/${strategyId}`)
+    const result = await httpClient.get<Strategy>(
+      `${API_BASE}/strategies/${strategyId}`
+    )
     if (!result.success) throw new Error('获取策略失败')
     return result.data!
   },
 
   async getActiveStrategy(): Promise<Strategy> {
-    const result = await httpClient.get<Strategy>(`${API_BASE}/strategies/active`)
+    const result = await httpClient.get<Strategy>(
+      `${API_BASE}/strategies/active`
+    )
     if (!result.success) throw new Error('获取激活策略失败')
     return result.data!
   },
 
   async getDefaultStrategyConfig(): Promise<StrategyConfig> {
-    const result = await httpClient.get<StrategyConfig>(`${API_BASE}/strategies/default-config`)
+    const result = await httpClient.get<StrategyConfig>(
+      `${API_BASE}/strategies/default-config`
+    )
     if (!result.success) throw new Error('获取默认策略配置失败')
     return result.data!
   },
@@ -668,7 +702,10 @@ export const api = {
     description: string
     config: StrategyConfig
   }): Promise<Strategy> {
-    const result = await httpClient.post<Strategy>(`${API_BASE}/strategies`, data)
+    const result = await httpClient.post<Strategy>(
+      `${API_BASE}/strategies`,
+      data
+    )
     if (!result.success) throw new Error('创建策略失败')
     return result.data!
   },
@@ -681,26 +718,134 @@ export const api = {
       config?: StrategyConfig
     }
   ): Promise<Strategy> {
-    const result = await httpClient.put<Strategy>(`${API_BASE}/strategies/${strategyId}`, data)
+    const result = await httpClient.put<Strategy>(
+      `${API_BASE}/strategies/${strategyId}`,
+      data
+    )
     if (!result.success) throw new Error('更新策略失败')
     return result.data!
   },
 
   async deleteStrategy(strategyId: string): Promise<void> {
-    const result = await httpClient.delete(`${API_BASE}/strategies/${strategyId}`)
+    const result = await httpClient.delete(
+      `${API_BASE}/strategies/${strategyId}`
+    )
     if (!result.success) throw new Error('删除策略失败')
   },
 
   async activateStrategy(strategyId: string): Promise<Strategy> {
-    const result = await httpClient.post<Strategy>(`${API_BASE}/strategies/${strategyId}/activate`)
+    const result = await httpClient.post<Strategy>(
+      `${API_BASE}/strategies/${strategyId}/activate`
+    )
     if (!result.success) throw new Error('激活策略失败')
     return result.data!
   },
 
   async duplicateStrategy(strategyId: string): Promise<Strategy> {
-    const result = await httpClient.post<Strategy>(`${API_BASE}/strategies/${strategyId}/duplicate`)
+    const result = await httpClient.post<Strategy>(
+      `${API_BASE}/strategies/${strategyId}/duplicate`
+    )
     if (!result.success) throw new Error('复制策略失败')
     return result.data!
   },
 
+  // ==================== 通知系统 (P0) ====================
+
+  async getNotifications(
+    limit = 50,
+    offset = 0
+  ): Promise<{ notifications: NotificationRecord[]; unread: number }> {
+    const res = await fetch(
+      `${API_BASE}/notifications?limit=${limit}&offset=${offset}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
+    return handleJSONResponse(res)
+  },
+
+  async markNotificationRead(id: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/notifications/${id}/read`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    await handleJSONResponse(res)
+  },
+
+  async markAllNotificationsRead(): Promise<void> {
+    const res = await fetch(`${API_BASE}/notifications/read-all`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    await handleJSONResponse(res)
+  },
+
+  async getNotificationSettings(): Promise<NotificationSettings> {
+    const res = await fetch(`${API_BASE}/notification-settings`, {
+      headers: getAuthHeaders(),
+    })
+    const data = await handleJSONResponse<{ settings: NotificationSettings }>(
+      res
+    )
+    return data.settings
+  },
+
+  async updateNotificationSettings(
+    settings: NotificationSettings
+  ): Promise<NotificationSettings> {
+    const res = await fetch(`${API_BASE}/notification-settings`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(settings),
+    })
+    const data = await handleJSONResponse<{ settings: NotificationSettings }>(
+      res
+    )
+    return data.settings
+  },
+
+  async testNotification(): Promise<{ message: string }> {
+    const res = await fetch(`${API_BASE}/notification-settings/test`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    return handleJSONResponse(res)
+  },
+
+  // ==================== 审计日志 (P0) ====================
+
+  async getAuditLogs(
+    limit = 100,
+    offset = 0,
+    action?: string
+  ): Promise<AuditEvent[]> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    })
+    if (action) params.set('action', action)
+    const res = await fetch(`${API_BASE}/audit-logs?${params}`, {
+      headers: getAuthHeaders(),
+    })
+    const data = await handleJSONResponse<{ events: AuditEvent[] }>(res)
+    return data.events || []
+  },
+
+  // ==================== 备份 (P1) ====================
+
+  async triggerBackup(): Promise<{ message: string; path: string }> {
+    const res = await fetch(`${API_BASE}/backups`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    return handleJSONResponse(res)
+  },
+
+  async getBackups(): Promise<BackupRecord[]> {
+    const res = await fetch(`${API_BASE}/backups`, {
+      headers: getAuthHeaders(),
+    })
+    const data = await handleJSONResponse<{ backups: BackupRecord[] }>(res)
+    return data.backups || []
+  },
 }

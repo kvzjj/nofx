@@ -1083,6 +1083,24 @@ export const translations = {
       obfuscationManual: 'Manual obfuscation required',
     },
 
+    // Notifications (P0)
+    notifications: {
+      button: 'Notifications',
+      title: 'Notification Settings',
+      loading: 'Loading settings...',
+      master: 'Enable notifications',
+      quietHours: 'Quiet hours (UTC)',
+      quietHoursHint: '-1 disables; critical alerts always pass',
+      events: 'Event subscriptions',
+      save: 'Save',
+      saved: 'Notification settings saved',
+      saveFailed: 'Failed to save settings',
+      test: 'Send test',
+      testSent: 'Test notification dispatched',
+      testFailed: 'Test delivery failed',
+      loadFailed: 'Failed to load settings',
+    },
+
     // Error Messages
     errors: {
       privatekeyIncomplete: 'Please enter at least {expected} characters',
@@ -2104,6 +2122,24 @@ export const translations = {
       obfuscationCopied: '混淆数据已复制到剪贴板',
       obfuscationInstruction: '请粘贴其他内容清空剪贴板，然后继续',
       obfuscationManual: '需要手动混淆',
+    },
+
+    // 通知 (P0)
+    notifications: {
+      button: '通知',
+      title: '通知设置',
+      loading: '正在加载设置...',
+      master: '启用通知',
+      quietHours: '免打扰时段 (UTC)',
+      quietHoursHint: '-1 表示关闭；紧急告警始终送达',
+      events: '事件订阅',
+      save: '保存',
+      saved: '通知设置已保存',
+      saveFailed: '保存设置失败',
+      test: '发送测试',
+      testSent: '测试通知已发送',
+      testFailed: '测试发送失败',
+      loadFailed: '加载设置失败',
     },
 
     // Error Messages
