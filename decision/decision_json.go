@@ -39,17 +39,6 @@ func (d *Decision) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-func parseFlexibleInt(raw json.RawMessage, field string) (int, error) {
-	v, err := parseFlexibleFloat(raw, field)
-	if err != nil {
-		return 0, err
-	}
-	if math.Trunc(v) != v || v > math.MaxInt || v < math.MinInt {
-		return 0, fmt.Errorf("%s must be an integer, got %v", field, v)
-	}
-	return int(v), nil
-}
-
 func parseFlexibleFloat(raw json.RawMessage, field string) (float64, error) {
 	if len(raw) == 0 || bytes.Equal(bytes.TrimSpace(raw), []byte("null")) {
 		return 0, nil

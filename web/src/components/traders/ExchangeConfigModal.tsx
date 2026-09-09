@@ -4,22 +4,16 @@ import { t, type Language } from '../../i18n/translations'
 import { api } from '../../lib/api'
 import { getExchangeIcon } from '../ExchangeIcons'
 import {
-  TwoStageKeyModal,
-  type TwoStageKeyModalResult,
-} from '../TwoStageKeyModal'
-import {
   WebCryptoEnvironmentCheck,
   type WebCryptoCheckStatus,
 } from '../WebCryptoEnvironmentCheck'
-import { BookOpen, Trash2, HelpCircle, ExternalLink, UserPlus } from 'lucide-react'
+import { BookOpen, Trash2, ExternalLink, UserPlus } from 'lucide-react'
 import { toast } from 'sonner'
-import { Tooltip } from './Tooltip'
 import { getShortName } from './utils'
 
 // Supported exchange templates for creating new accounts
 const SUPPORTED_EXCHANGE_TEMPLATES = [
   { exchange_type: 'binance', name: 'Binance Futures', type: 'cex' as const },
-  { exchange_type: 'okx', name: 'OKX Futures', type: 'cex' as const },
 ]
 
 interface ExchangeConfigModalProps {
@@ -58,7 +52,6 @@ export function ExchangeConfigModal({
   const [selectedExchangeType, setSelectedExchangeType] = useState('')
   const [apiKey, setApiKey] = useState('')
   const [secretKey, setSecretKey] = useState('')
-  const [passphrase, setPassphrase] = useState('')
   const [testnet, setTestnet] = useState(false)
   const [showGuide, setShowGuide] = useState(false)
   const [serverIP, setServerIP] = useState<{
@@ -72,24 +65,6 @@ export function ExchangeConfigModal({
 
   // 币安配置指南展开状态
   const [showBinanceGuide, setShowBinanceGuide] = useState(false)
-
-  // Aster 特定字段
-  const [asterUser, setAsterUser] = useState('')
-  const [asterSigner, setAsterSigner] = useState('')
-  const [asterPrivateKey, setAsterPrivateKey] = useState('')
-
-  // Hyperliquid 特定字段
-  const [hyperliquidWalletAddr, setHyperliquidWalletAddr] = useState('')
-
-  // LIGHTER 特定字段
-  const [lighterWalletAddr, setLighterWalletAddr] = useState('')
-  const [lighterPrivateKey, setLighterPrivateKey] = useState('')
-  const [lighterApiKeyPrivateKey, setLighterApiKeyPrivateKey] = useState('')
-
-  // 安全输入状态
-  const [secureInputTarget, setSecureInputTarget] = useState<
-    null | 'hyperliquid' | 'aster' | 'lighter'
-  >(null)
 
   // 保存中状态
   const [isSaving, setIsSaving] = useState(false)
@@ -113,28 +88,15 @@ export function ExchangeConfigModal({
   const currentExchangeType = editingExchangeId
     ? selectedExchange?.exchange_type
     : selectedExchangeType
-  const supportsTestnet =
-    currentExchangeType === 'binance' ||
-    currentExchangeType === 'okx' ||
-    currentExchangeType === 'hyperliquid' ||
-    currentExchangeType === 'lighter'
+  const supportsTestnet = currentExchangeType === 'binance'
   const testnetDescription =
-    currentExchangeType === 'binance'
-      ? language === 'zh'
-        ? '启用后使用 Binance Futures Testnet，请填写测试网 API Key'
-        : 'Uses Binance Futures Testnet. Enter testnet API keys.'
-      : currentExchangeType === 'okx'
-        ? language === 'zh'
-          ? '启用后使用 OKX 模拟盘环境，请填写模拟盘 API Key 和 Passphrase'
-          : 'Uses the OKX demo trading environment. Enter demo API keys and passphrase.'
-        : language === 'zh'
-          ? '启用后使用该交易所测试环境'
-          : 'Uses the exchange testnet environment.'
+    language === 'zh'
+      ? '启用后使用 Binance Futures Testnet，请填写测试网 API Key'
+      : 'Uses Binance Futures Testnet. Enter testnet API keys.'
 
   // 交易所注册链接配置
   const exchangeRegistrationLinks: Record<string, { url: string; hasReferral?: boolean }> = {
     binance: { url: 'https://www.binance.com/join?ref=NOFXENG', hasReferral: true },
-    okx: { url: 'https://www.okx.com/join/1865360', hasReferral: true },
   }
 
   // 如果是编辑现有交易所，初始化表单数据
@@ -143,21 +105,7 @@ export function ExchangeConfigModal({
       setAccountName(selectedExchange.account_name || '')
       setApiKey(selectedExchange.apiKey || '')
       setSecretKey(selectedExchange.secretKey || '')
-      setPassphrase('') // Don't load existing passphrase for security
       setTestnet(selectedExchange.testnet || false)
-
-      // Aster 字段
-      setAsterUser(selectedExchange.asterUser || '')
-      setAsterSigner(selectedExchange.asterSigner || '')
-      setAsterPrivateKey('') // Don't load existing private key for security
-
-      // Hyperliquid 字段
-      setHyperliquidWalletAddr(selectedExchange.hyperliquidWalletAddr || '')
-
-      // LIGHTER 字段
-      setLighterWalletAddr(selectedExchange.lighterWalletAddr || '')
-      setLighterPrivateKey('') // Don't load existing private key for security
-      setLighterApiKeyPrivateKey('') // Don't load existing API key for security
     }
   }, [editingExchangeId, selectedExchange])
 
@@ -220,51 +168,6 @@ export function ExchangeConfigModal({
     }
   }
 
-  // 安全输入处理函数
-  const secureInputContextLabel =
-    secureInputTarget === 'aster'
-      ? t('asterExchangeName', language)
-      : secureInputTarget === 'hyperliquid'
-        ? t('hyperliquidExchangeName', language)
-        : undefined
-
-  const handleSecureInputCancel = () => {
-    setSecureInputTarget(null)
-  }
-
-  const handleSecureInputComplete = ({
-    value,
-    obfuscationLog,
-  }: TwoStageKeyModalResult) => {
-    const trimmed = value.trim()
-    if (secureInputTarget === 'hyperliquid') {
-      setApiKey(trimmed)
-    }
-    if (secureInputTarget === 'aster') {
-      setAsterPrivateKey(trimmed)
-    }
-    if (secureInputTarget === 'lighter') {
-      setLighterPrivateKey(trimmed)
-      toast.success(t('lighterPrivateKeyImported', language))
-    }
-    // 仅在开发环境输出调试信息
-    if (import.meta.env.DEV) {
-      console.log('Secure input obfuscation log:', obfuscationLog)
-    }
-    setSecureInputTarget(null)
-  }
-
-  // 掩盖敏感数据显示
-  const maskSecret = (secret: string) => {
-    if (!secret || secret.length === 0) return ''
-    if (secret.length <= 8) return '*'.repeat(secret.length)
-    return (
-      secret.slice(0, 4) +
-      '*'.repeat(Math.max(secret.length - 8, 4)) +
-      secret.slice(-4)
-    )
-  }
-
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (isSaving) return
@@ -284,14 +187,8 @@ export function ExchangeConfigModal({
 
     setIsSaving(true)
     try {
-      // 根据交易所类型验证不同字段
-      if (currentExchangeType === 'binance') {
-        if (!apiKey.trim() || !secretKey.trim()) return
-        await onSave(exchangeId, exchangeType, trimmedAccountName, apiKey.trim(), secretKey.trim(), '', testnet)
-      } else if (currentExchangeType === 'okx') {
-        if (!apiKey.trim() || !secretKey.trim() || !passphrase.trim()) return
-        await onSave(exchangeId, exchangeType, trimmedAccountName, apiKey.trim(), secretKey.trim(), passphrase.trim(), testnet)
-      }
+      if (!apiKey.trim() || !secretKey.trim()) return
+      await onSave(exchangeId, exchangeType, trimmedAccountName, apiKey.trim(), secretKey.trim(), '', testnet)
     } finally {
       setIsSaving(false)
     }
@@ -519,11 +416,8 @@ export function ExchangeConfigModal({
                   </div>
                 )}
 
-                {/* Binance/Bybit/OKX/Bitget 的输入字段 */}
-                {(currentExchangeType === 'binance' ||
-                  currentExchangeType === 'bybit' ||
-                  currentExchangeType === 'okx' ||
-                  currentExchangeType === 'bitget') && (
+                {/* 币安的输入字段 */}
+                {currentExchangeType === 'binance' && (
                     <>
                       {/* 币安用户配置提示 (D1 方案) */}
                       {currentExchangeType === 'binance' && (
@@ -668,29 +562,6 @@ export function ExchangeConfigModal({
                         />
                       </div>
 
-                      {(currentExchangeType === 'okx' || currentExchangeType === 'bitget') && (
-                        <div>
-                          <label
-                            className="block text-sm font-semibold mb-2"
-                            style={{ color: '#EAECEF' }}
-                          >
-                            {t('passphrase', language)}
-                          </label>
-                          <input
-                            type="password"
-                            value={passphrase}
-                            onChange={(e) => setPassphrase(e.target.value)}
-                            placeholder={t('enterPassphrase', language)}
-                            className="w-full px-3 py-2 rounded"
-                            style={{
-                              background: '#0B0E11',
-                              border: '1px solid #2B3139',
-                              color: '#EAECEF',
-                            }}
-                            required
-                          />
-                        </div>
-                      )}
 
                       {/* Binance 白名单IP提示 */}
                       {currentExchangeType === 'binance' && (
@@ -752,397 +623,8 @@ export function ExchangeConfigModal({
                     </>
                   )}
 
-                {/* Aster 交易所的字段 */}
-                {currentExchangeType === 'aster' && (
-                  <>
-                    {/* API Pro 代理钱包说明 banner */}
-                    <div
-                      className="p-3 rounded mb-4"
-                      style={{
-                        background: 'rgba(240, 185, 11, 0.1)',
-                        border: '1px solid rgba(240, 185, 11, 0.3)',
-                      }}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span style={{ color: '#F0B90B', fontSize: '16px' }}>
-                          🔐
-                        </span>
-                        <div className="flex-1">
-                          <div
-                            className="text-sm font-semibold mb-1"
-                            style={{ color: '#F0B90B' }}
-                          >
-                            {t('asterApiProTitle', language)}
-                          </div>
-                          <div
-                            className="text-xs"
-                            style={{ color: '#848E9C', lineHeight: '1.5' }}
-                          >
-                            {t('asterApiProDesc', language)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
 
-                    {/* 主钱包地址 */}
-                    <div>
-                      <label
-                        className="block text-sm font-semibold mb-2 flex items-center gap-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('asterUserLabel', language)}
-                        <Tooltip content={t('asterUserDesc', language)}>
-                          <HelpCircle
-                            className="w-4 h-4 cursor-help"
-                            style={{ color: '#F0B90B' }}
-                          />
-                        </Tooltip>
-                      </label>
-                      <input
-                        type="text"
-                        value={asterUser}
-                        onChange={(e) => setAsterUser(e.target.value)}
-                        placeholder={t('enterAsterUser', language)}
-                        className="w-full px-3 py-2 rounded"
-                        style={{
-                          background: '#0B0E11',
-                          border: '1px solid #2B3139',
-                          color: '#EAECEF',
-                        }}
-                        required
-                      />
-                      <div
-                        className="text-xs mt-1"
-                        style={{ color: '#848E9C' }}
-                      >
-                        {t('asterUserDesc', language)}
-                      </div>
-                    </div>
 
-                    {/* API Pro 代理钱包地址 */}
-                    <div>
-                      <label
-                        className="block text-sm font-semibold mb-2 flex items-center gap-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('asterSignerLabel', language)}
-                        <Tooltip content={t('asterSignerDesc', language)}>
-                          <HelpCircle
-                            className="w-4 h-4 cursor-help"
-                            style={{ color: '#F0B90B' }}
-                          />
-                        </Tooltip>
-                      </label>
-                      <input
-                        type="text"
-                        value={asterSigner}
-                        onChange={(e) => setAsterSigner(e.target.value)}
-                        placeholder={t('enterAsterSigner', language)}
-                        className="w-full px-3 py-2 rounded"
-                        style={{
-                          background: '#0B0E11',
-                          border: '1px solid #2B3139',
-                          color: '#EAECEF',
-                        }}
-                        required
-                      />
-                      <div
-                        className="text-xs mt-1"
-                        style={{ color: '#848E9C' }}
-                      >
-                        {t('asterSignerDesc', language)}
-                      </div>
-                    </div>
-
-                    {/* API Pro 代理钱包私钥 */}
-                    <div>
-                      <label
-                        className="block text-sm font-semibold mb-2 flex items-center gap-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('asterPrivateKeyLabel', language)}
-                        <Tooltip content={t('asterPrivateKeyDesc', language)}>
-                          <HelpCircle
-                            className="w-4 h-4 cursor-help"
-                            style={{ color: '#F0B90B' }}
-                          />
-                        </Tooltip>
-                      </label>
-                      <input
-                        type="password"
-                        value={asterPrivateKey}
-                        onChange={(e) => setAsterPrivateKey(e.target.value)}
-                        placeholder={t('enterAsterPrivateKey', language)}
-                        className="w-full px-3 py-2 rounded"
-                        style={{
-                          background: '#0B0E11',
-                          border: '1px solid #2B3139',
-                          color: '#EAECEF',
-                        }}
-                        required
-                      />
-                      <div
-                        className="text-xs mt-1"
-                        style={{ color: '#848E9C' }}
-                      >
-                        {t('asterPrivateKeyDesc', language)}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* Hyperliquid 交易所的字段 */}
-                {currentExchangeType === 'hyperliquid' && (
-                  <>
-                    {/* 安全提示 banner */}
-                    <div
-                      className="p-3 rounded mb-4"
-                      style={{
-                        background: 'rgba(240, 185, 11, 0.1)',
-                        border: '1px solid rgba(240, 185, 11, 0.3)',
-                      }}
-                    >
-                      <div className="flex items-start gap-2">
-                        <span style={{ color: '#F0B90B', fontSize: '16px' }}>
-                          🔐
-                        </span>
-                        <div className="flex-1">
-                          <div
-                            className="text-sm font-semibold mb-1"
-                            style={{ color: '#F0B90B' }}
-                          >
-                            {t('hyperliquidAgentWalletTitle', language)}
-                          </div>
-                          <div
-                            className="text-xs"
-                            style={{ color: '#848E9C', lineHeight: '1.5' }}
-                          >
-                            {t('hyperliquidAgentWalletDesc', language)}
-                          </div>
-                        </div>
-                      </div>
-                    </div>
-
-                    {/* Agent Private Key 字段 */}
-                    <div>
-                      <label
-                        className="block text-sm font-semibold mb-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('hyperliquidAgentPrivateKey', language)}
-                      </label>
-                      <div className="flex flex-col gap-2">
-                        <div className="flex gap-2">
-                          <input
-                            type="text"
-                            value={maskSecret(apiKey)}
-                            readOnly
-                            placeholder={t(
-                              'enterHyperliquidAgentPrivateKey',
-                              language
-                            )}
-                            className="w-full px-3 py-2 rounded"
-                            style={{
-                              background: '#0B0E11',
-                              border: '1px solid #2B3139',
-                              color: '#EAECEF',
-                            }}
-                          />
-                          <button
-                            type="button"
-                            onClick={() => setSecureInputTarget('hyperliquid')}
-                            className="px-3 py-2 rounded text-xs font-semibold transition-all hover:scale-105"
-                            style={{
-                              background: '#F0B90B',
-                              color: '#000',
-                              whiteSpace: 'nowrap',
-                            }}
-                          >
-                            {apiKey
-                              ? t('secureInputReenter', language)
-                              : t('secureInputButton', language)}
-                          </button>
-                          {apiKey && (
-                            <button
-                              type="button"
-                              onClick={() => setApiKey('')}
-                              className="px-3 py-2 rounded text-xs font-semibold transition-all hover:scale-105"
-                              style={{
-                                background: '#1B1F2B',
-                                color: '#848E9C',
-                                whiteSpace: 'nowrap',
-                              }}
-                            >
-                              {t('secureInputClear', language)}
-                            </button>
-                          )}
-                        </div>
-                        {apiKey && (
-                          <div className="text-xs" style={{ color: '#848E9C' }}>
-                            {t('secureInputHint', language)}
-                          </div>
-                        )}
-                      </div>
-                      <div
-                        className="text-xs mt-1"
-                        style={{ color: '#848E9C' }}
-                      >
-                        {t('hyperliquidAgentPrivateKeyDesc', language)}
-                      </div>
-                    </div>
-
-                    {/* Main Wallet Address 字段 */}
-                    <div>
-                      <label
-                        className="block text-sm font-semibold mb-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('hyperliquidMainWalletAddress', language)}
-                      </label>
-                      <input
-                        type="text"
-                        value={hyperliquidWalletAddr}
-                        onChange={(e) =>
-                          setHyperliquidWalletAddr(e.target.value)
-                        }
-                        placeholder={t(
-                          'enterHyperliquidMainWalletAddress',
-                          language
-                        )}
-                        className="w-full px-3 py-2 rounded"
-                        style={{
-                          background: '#0B0E11',
-                          border: '1px solid #2B3139',
-                          color: '#EAECEF',
-                        }}
-                        required
-                      />
-                      <div
-                        className="text-xs mt-1"
-                        style={{ color: '#848E9C' }}
-                      >
-                        {t('hyperliquidMainWalletAddressDesc', language)}
-                      </div>
-                    </div>
-                  </>
-                )}
-
-                {/* LIGHTER 特定配置 */}
-                {currentExchangeType === 'lighter' && (
-                  <>
-                    {/* L1 Wallet Address */}
-                    <div className="mb-4">
-                      <label
-                        className="block text-sm font-semibold mb-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('lighterWalletAddress', language)}
-                      </label>
-                      <input
-                        type="text"
-                        value={lighterWalletAddr}
-                        onChange={(e) => setLighterWalletAddr(e.target.value)}
-                        placeholder={t('enterLighterWalletAddress', language)}
-                        className="w-full px-3 py-2 rounded"
-                        style={{
-                          background: '#0B0E11',
-                          border: '1px solid #2B3139',
-                          color: '#EAECEF',
-                        }}
-                        required
-                      />
-                      <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
-                        {t('lighterWalletAddressDesc', language)}
-                      </div>
-                    </div>
-
-                    {/* L1 Private Key */}
-                    <div className="mb-4">
-                      <label
-                        className="block text-sm font-semibold mb-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('lighterPrivateKey', language)}
-                        <button
-                          type="button"
-                          onClick={() => setSecureInputTarget('lighter')}
-                          className="ml-2 text-xs underline"
-                          style={{ color: '#F0B90B' }}
-                        >
-                          {t('secureInputButton', language)}
-                        </button>
-                      </label>
-                      <input
-                        type="password"
-                        value={lighterPrivateKey}
-                        onChange={(e) => setLighterPrivateKey(e.target.value)}
-                        placeholder={t('enterLighterPrivateKey', language)}
-                        className="w-full px-3 py-2 rounded font-mono text-sm"
-                        style={{
-                          background: '#0B0E11',
-                          border: '1px solid #2B3139',
-                          color: '#EAECEF',
-                        }}
-                        required
-                      />
-                      <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
-                        {t('lighterPrivateKeyDesc', language)}
-                      </div>
-                    </div>
-
-                    {/* API Key Private Key */}
-                    <div className="mb-4">
-                      <label
-                        className="block text-sm font-semibold mb-2"
-                        style={{ color: '#EAECEF' }}
-                      >
-                        {t('lighterApiKeyPrivateKey', language)} ⭐
-                      </label>
-                      <input
-                        type="password"
-                        value={lighterApiKeyPrivateKey}
-                        onChange={(e) => setLighterApiKeyPrivateKey(e.target.value)}
-                        placeholder={t('enterLighterApiKeyPrivateKey', language)}
-                        className="w-full px-3 py-2 rounded font-mono text-sm"
-                        style={{
-                          background: '#0B0E11',
-                          border: '1px solid #2B3139',
-                          color: '#EAECEF',
-                        }}
-                      />
-                      <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
-                        {t('lighterApiKeyPrivateKeyDesc', language)}
-                      </div>
-                      <div className="text-xs mt-2 p-2 rounded" style={{
-                        background: '#1E2329',
-                        border: '1px solid #2B3139',
-                        color: '#F0B90B'
-                      }}>
-                        💡 {t('lighterApiKeyOptionalNote', language)}
-                      </div>
-                    </div>
-
-                    {/* V1/V2 Status Display */}
-                    <div className="mb-4 p-3 rounded" style={{
-                      background: lighterApiKeyPrivateKey ? '#0F3F2E' : '#3F2E0F',
-                      border: '1px solid ' + (lighterApiKeyPrivateKey ? '#10B981' : '#F59E0B')
-                    }}>
-                      <div className="flex items-center gap-2">
-                        <div className="text-sm font-semibold" style={{
-                          color: lighterApiKeyPrivateKey ? '#10B981' : '#F59E0B'
-                        }}>
-                          {lighterApiKeyPrivateKey ? '✅ LIGHTER V2' : '⚠️ LIGHTER V1'}
-                        </div>
-                      </div>
-                      <div className="text-xs mt-1" style={{ color: '#848E9C' }}>
-                        {lighterApiKeyPrivateKey
-                          ? t('lighterV2Description', language)
-                          : t('lighterV1Description', language)
-                        }
-                      </div>
-                    </div>
-                  </>
-                )}
               </>
             )}
           </div>
@@ -1165,35 +647,8 @@ export function ExchangeConfigModal({
                 isSaving ||
                 !selectedTemplate ||
                 !accountName.trim() ||
-                (currentExchangeType === 'binance' &&
-                  (!apiKey.trim() || !secretKey.trim())) ||
-                (currentExchangeType === 'okx' &&
-                  (!apiKey.trim() ||
-                    !secretKey.trim() ||
-                    !passphrase.trim())) ||
-                (currentExchangeType === 'bitget' &&
-                  (!apiKey.trim() ||
-                    !secretKey.trim() ||
-                    !passphrase.trim())) ||
-                (currentExchangeType === 'hyperliquid' &&
-                  (!apiKey.trim() || !hyperliquidWalletAddr.trim())) || // 验证私钥和钱包地址
-                (currentExchangeType === 'aster' &&
-                  (!asterUser.trim() ||
-                    !asterSigner.trim() ||
-                    !asterPrivateKey.trim())) ||
-                (currentExchangeType === 'lighter' &&
-                  (!lighterWalletAddr.trim() || !lighterPrivateKey.trim())) ||
-                (currentExchangeType === 'bybit' &&
-                  (!apiKey.trim() || !secretKey.trim())) ||
-                (selectedTemplate?.type === 'cex' &&
-                  currentExchangeType !== 'hyperliquid' &&
-                  currentExchangeType !== 'aster' &&
-                  currentExchangeType !== 'lighter' &&
-                  currentExchangeType !== 'binance' &&
-                  currentExchangeType !== 'bybit' &&
-                  currentExchangeType !== 'okx' &&
-                  currentExchangeType !== 'bitget' &&
-                  (!apiKey.trim() || !secretKey.trim()))
+                !apiKey.trim() ||
+                !secretKey.trim()
               }
               className="flex-1 px-4 py-2 rounded text-sm font-semibold disabled:opacity-50"
               style={{ background: '#F0B90B', color: '#000' }}
@@ -1242,15 +697,6 @@ export function ExchangeConfigModal({
         </div>
       )}
 
-      {/* Two Stage Key Modal */}
-      <TwoStageKeyModal
-        isOpen={secureInputTarget !== null}
-        language={language}
-        contextLabel={secureInputContextLabel}
-        expectedLength={64}
-        onCancel={handleSecureInputCancel}
-        onComplete={handleSecureInputComplete}
-      />
     </div>
   )
 }

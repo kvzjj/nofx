@@ -112,42 +112,23 @@ export interface AIModel {
 
 export interface Exchange {
   id: string                     // UUID (empty for supported exchange templates)
-  exchange_type: string          // "binance", "okx"
+  exchange_type: string          // "binance"
   account_name: string           // User-defined account name
   name: string                   // Display name
   type: 'cex' | 'dex'
   enabled: boolean
   apiKey?: string
   secretKey?: string
-  passphrase?: string            // OKX specific
   testnet?: boolean
-  // Hyperliquid specific
-  hyperliquidWalletAddr?: string
-  // Aster specific
-  asterUser?: string
-  asterSigner?: string
-  asterPrivateKey?: string
-  // LIGHTER specific
-  lighterWalletAddr?: string
-  lighterPrivateKey?: string
-  lighterApiKeyPrivateKey?: string
 }
 
 export interface CreateExchangeRequest {
-  exchange_type: string          // "binance", "okx"
+  exchange_type: string          // "binance"
   account_name: string           // User-defined account name
   enabled: boolean
   api_key?: string
   secret_key?: string
-  passphrase?: string
   testnet?: boolean
-  hyperliquid_wallet_addr?: string
-  aster_user?: string
-  aster_signer?: string
-  aster_private_key?: string
-  lighter_wallet_addr?: string
-  lighter_private_key?: string
-  lighter_api_key_private_key?: string
 }
 
 export interface CreateTraderRequest {
@@ -187,18 +168,7 @@ export interface UpdateExchangeConfigRequest {
       enabled: boolean
       api_key: string
       secret_key: string
-      passphrase?: string
       testnet?: boolean
-      // Hyperliquid 特定字段
-      hyperliquid_wallet_addr?: string
-      // Aster 特定字段
-      aster_user?: string
-      aster_signer?: string
-      aster_private_key?: string
-      // LIGHTER 特定字段
-      lighter_wallet_addr?: string
-      lighter_private_key?: string
-      lighter_api_key_private_key?: string
     }
   }
 }

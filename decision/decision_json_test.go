@@ -1,6 +1,9 @@
 package decision
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestExtractDecisionsAcceptsCommonModelFormattingDrift(t *testing.T) {
 	response := `<reasoning>valid setup</reasoning><decision>{"decisions":[{
@@ -76,5 +79,16 @@ func TestExtractDecisionsIgnoresBracketedProse(t *testing.T) {
 	}
 	if len(decisions) != 1 || decisions[0].Action != "wait" {
 		t.Fatalf("unexpected decisions: %#v", decisions)
+	}
+}
+
+func TestExtractCoTTraceKeepsBracketedProse(t *testing.T) {
+	response := "RSI [14] is high and momentum [1h] faded.\n[{\"symbol\":\"BTCUSDT\",\"action\":\"wait\"}]"
+	trace := extractCoTTrace(response)
+	if !strings.Contains(trace, "RSI [14]") || !strings.Contains(trace, "momentum [1h]") {
+		t.Fatalf("reasoning trace was truncated at bracketed prose: %q", trace)
+	}
+	if strings.Contains(trace, "BTCUSDT") {
+		t.Fatalf("reasoning trace must not include the decision JSON: %q", trace)
 	}
 }

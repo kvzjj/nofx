@@ -12,14 +12,9 @@ function getShortName(fullName: string): string {
   return parts.length > 1 ? parts[parts.length - 1] : fullName
 }
 
-// 交易所注册链接配置
+// 交易所注册链接配置（仅支持币安）
 const EXCHANGE_REGISTRATION_LINKS: Record<string, { url: string; hasReferral?: boolean }> = {
   binance: { url: 'https://www.binance.com/join?ref=NOFXENG', hasReferral: true },
-  okx: { url: 'https://www.okx.com/join/1865360', hasReferral: true },
-  bybit: { url: 'https://partner.bybit.com/b/83856', hasReferral: true },
-  hyperliquid: { url: 'https://app.hyperliquid.xyz/join/AITRADING', hasReferral: true },
-  aster: { url: 'https://www.asterdex.com/en/referral/fdfc0e', hasReferral: true },
-  lighter: { url: 'https://lighter.xyz', hasReferral: false },
 }
 
 import type { TraderConfigData } from '../types'

@@ -264,30 +264,22 @@ export function useTraderActions({
     accountName: string,
     apiKey: string,
     secretKey?: string,
-    passphrase?: string,
+    _passphrase?: string,
     testnet?: boolean,
-    hyperliquidWalletAddr?: string,
-    asterUser?: string,
-    asterSigner?: string,
-    asterPrivateKey?: string,
-    lighterWalletAddr?: string,
-    lighterPrivateKey?: string,
-    lighterApiKeyPrivateKey?: string
+    _hyperliquidWalletAddr?: string,
+    _asterUser?: string,
+    _asterSigner?: string,
+    _asterPrivateKey?: string,
+    _lighterWalletAddr?: string,
+    _lighterPrivateKey?: string,
+    _lighterApiKeyPrivateKey?: string
   ) => {
     try {
       const payload = {
         enabled: true,
         api_key: apiKey || '',
         secret_key: secretKey || '',
-        passphrase: passphrase || '',
         testnet: testnet || false,
-        hyperliquid_wallet_addr: hyperliquidWalletAddr || '',
-        aster_user: asterUser || '',
-        aster_signer: asterSigner || '',
-        aster_private_key: asterPrivateKey || '',
-        lighter_wallet_addr: lighterWalletAddr || '',
-        lighter_private_key: lighterPrivateKey || '',
-        lighter_api_key_private_key: lighterApiKeyPrivateKey || '',
       }
 
       if (exchangeId) {

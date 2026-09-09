@@ -21,11 +21,7 @@ import (
 // ============================================================================
 
 var (
-	// Safe regex: precisely match ```json code blocks
-	reJSONFence      = regexp.MustCompile(`(?is)` + "```json\\s*(\\[\\s*\\{.*?\\}\\s*\\])\\s*```")
-	reJSONArray      = regexp.MustCompile(`(?is)\[\s*\{.*?\}\s*\]`)
-	reArrayHead      = regexp.MustCompile(`^\[\s*\{`)
-	reArrayOpenSpace = regexp.MustCompile(`^\[\s+\{`)
+	// Safe regex: precisely match reasoning/decision XML tags
 	reInvisibleRunes = regexp.MustCompile("[\u200B\u200C\u200D\uFEFF]")
 
 	// XML tag extraction (supports any characters in reasoning chain)
@@ -1225,10 +1221,21 @@ func extractCoTTrace(response string) string {
 		return strings.TrimSpace(response[:decisionIdx])
 	}
 
-	jsonStart := strings.Index(response, "[")
-	if jsonStart > 0 {
-		logger.Infof("⚠️  Extracted reasoning chain using old format ([ character separator)")
-		return strings.TrimSpace(response[:jsonStart])
+	// Legacy fallback: separate prose from a JSON decision array. Only treat
+	// "[" as the boundary when it opens a decision array ("[{"), so bracketed
+	// prose like "RSI [14]" or "momentum [1h]" does not truncate the trace.
+	for i := 0; i < len(response); i++ {
+		if response[i] != '[' {
+			continue
+		}
+		j := i + 1
+		for j < len(response) && (response[j] == ' ' || response[j] == '\t' || response[j] == '\r' || response[j] == '\n') {
+			j++
+		}
+		if i > 0 && j < len(response) && response[j] == '{' {
+			logger.Infof("⚠️  Extracted reasoning chain using legacy format ([{ separator)")
+			return strings.TrimSpace(response[:i])
+		}
 	}
 
 	return strings.TrimSpace(response)
@@ -1321,46 +1328,8 @@ func fixMissingQuotes(jsonStr string) string {
 	return jsonStr
 }
 
-func validateJSONFormat(jsonStr string) error {
-	trimmed := strings.TrimSpace(jsonStr)
-
-	if !reArrayHead.MatchString(trimmed) {
-		if strings.HasPrefix(trimmed, "[") && !strings.Contains(trimmed[:min(20, len(trimmed))], "{") {
-			return fmt.Errorf("not a valid decision array (must contain objects {}), actual content: %s", trimmed[:min(50, len(trimmed))])
-		}
-		return fmt.Errorf("JSON must start with [{ (whitespace allowed), actual: %s", trimmed[:min(20, len(trimmed))])
-	}
-
-	if strings.Contains(jsonStr, "~") {
-		return fmt.Errorf("JSON cannot contain range symbol ~, all numbers must be precise single values")
-	}
-
-	for i := 0; i < len(jsonStr)-4; i++ {
-		if jsonStr[i] >= '0' && jsonStr[i] <= '9' &&
-			jsonStr[i+1] == ',' &&
-			jsonStr[i+2] >= '0' && jsonStr[i+2] <= '9' &&
-			jsonStr[i+3] >= '0' && jsonStr[i+3] <= '9' &&
-			jsonStr[i+4] >= '0' && jsonStr[i+4] <= '9' {
-			return fmt.Errorf("JSON numbers cannot contain thousand separator comma, found: %s", jsonStr[i:min(i+10, len(jsonStr))])
-		}
-	}
-
-	return nil
-}
-
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func removeInvisibleRunes(s string) string {
 	return reInvisibleRunes.ReplaceAllString(s, "")
-}
-
-func compactArrayOpen(s string) string {
-	return reArrayOpenSpace.ReplaceAllString(strings.TrimSpace(s), "[{")
 }
 
 // ============================================================================

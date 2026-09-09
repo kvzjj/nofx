@@ -39,8 +39,8 @@ export default function FeaturesSection({ language }: FeaturesSectionProps) {
       icon: Blocks,
       title: language === 'zh' ? '多交易所支持' : 'Multi-Exchange Support',
       desc: language === 'zh'
-        ? 'Binance 和 OKX，一套系统管理多个合约账户'
-        : 'Binance and OKX - one system, multiple futures accounts',
+        ? '币安合约，一套系统专注管理合约账户'
+        : 'Binance Futures - one focused system for futures accounts',
     },
     {
       icon: BarChart3,

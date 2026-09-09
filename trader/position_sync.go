@@ -869,9 +869,6 @@ func (m *PositionSyncManager) createTrader(config *store.TraderFullConfig) (Trad
 	case "binance":
 		return NewFuturesTrader(exchange.APIKey, exchange.SecretKey, config.Trader.UserID), nil
 
-	case "okx":
-		return NewOKXTraderWithTestnet(exchange.APIKey, exchange.SecretKey, exchange.Passphrase, exchange.Testnet), nil
-
 	default:
 		return nil, fmt.Errorf("unsupported exchange type: %s", exchange.ExchangeType)
 	}

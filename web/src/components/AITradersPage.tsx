@@ -182,7 +182,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const configuredExchanges =
     allExchanges?.filter((e) => {
       const exchangeType = (e.exchange_type || e.id).toLowerCase()
-      if (exchangeType !== 'binance' && exchangeType !== 'okx') return false
+      if (exchangeType !== 'binance') return false
       return e.enabled
     }) || []
 
@@ -192,7 +192,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const enabledExchanges =
     allExchanges?.filter((e) => {
       const exchangeType = (e.exchange_type || e.id).toLowerCase()
-      if (exchangeType !== 'binance' && exchangeType !== 'okx') return false
+      if (exchangeType !== 'binance') return false
       if (!e.enabled) return false
       return true
     }) || []
@@ -606,15 +606,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     accountName: string,
     apiKey: string,
     secretKey?: string,
-    passphrase?: string,
-    testnet?: boolean,
-    hyperliquidWalletAddr?: string,
-    asterUser?: string,
-    asterSigner?: string,
-    asterPrivateKey?: string,
-    lighterWalletAddr?: string,
-    lighterPrivateKey?: string,
-    lighterApiKeyPrivateKey?: string
+    _passphrase?: string,
+    testnet?: boolean
   ) => {
     try {
       if (exchangeId) {
@@ -631,15 +624,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
               enabled: true,
               api_key: apiKey || '',
               secret_key: secretKey || '',
-              passphrase: passphrase || '',
               testnet: testnet || false,
-              hyperliquid_wallet_addr: hyperliquidWalletAddr || '',
-              aster_user: asterUser || '',
-              aster_signer: asterSigner || '',
-              aster_private_key: asterPrivateKey || '',
-              lighter_wallet_addr: lighterWalletAddr || '',
-              lighter_private_key: lighterPrivateKey || '',
-              lighter_api_key_private_key: lighterApiKeyPrivateKey || '',
             },
           },
         }
@@ -657,15 +642,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
           enabled: true,
           api_key: apiKey || '',
           secret_key: secretKey || '',
-          passphrase: passphrase || '',
           testnet: testnet || false,
-          hyperliquid_wallet_addr: hyperliquidWalletAddr || '',
-          aster_user: asterUser || '',
-          aster_signer: asterSigner || '',
-          aster_private_key: asterPrivateKey || '',
-          lighter_wallet_addr: lighterWalletAddr || '',
-          lighter_private_key: lighterPrivateKey || '',
-          lighter_api_key_private_key: lighterApiKeyPrivateKey || '',
         }
 
         await toast.promise(api.createExchangeEncrypted(createRequest), {

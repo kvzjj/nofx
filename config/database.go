@@ -29,9 +29,9 @@ type DatabaseInterface interface {
 	GetAIModels(userID string) ([]*AIModelConfig, error)
 	UpdateAIModel(userID, id string, enabled bool, apiKey, customAPIURL, customModelName string) error
 	GetExchanges(userID string) ([]*ExchangeConfig, error)
-	UpdateExchange(userID, id string, enabled bool, apiKey, secretKey string, testnet bool, hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey, lighterWalletAddr, lighterPrivateKey string) error
+	UpdateExchange(userID, id string, enabled bool, apiKey, secretKey string, testnet bool) error
 	CreateAIModel(userID, id, name, provider string, enabled bool, apiKey, customAPIURL string) error
-	CreateExchange(userID, id, name, typ string, enabled bool, apiKey, secretKey string, testnet bool, hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey string) error
+	CreateExchange(userID, id, name, typ string, enabled bool, apiKey, secretKey string, testnet bool) error
 	CreateTrader(trader *TraderRecord) error
 	GetTraders(userID string) ([]*TraderRecord, error)
 	UpdateTraderStatus(userID, id string, isRunning bool) error
@@ -488,7 +488,6 @@ func (d *Database) initDefaultData() error {
 		id, name, typ string
 	}{
 		{"binance", "Binance Futures", "binance"},
-		{"okx", "OKX Futures", "okx"},
 	}
 
 	for _, exchange := range exchanges {
@@ -1183,9 +1182,9 @@ func (d *Database) GetExchanges(userID string) ([]*ExchangeConfig, error) {
 
 // UpdateExchange 更新交易所配置，如果不存在则创建用户特定配置
 // 🔒 安全特性：空值不会覆盖现有的敏感字段（api_key, secret_key, aster_private_key, lighter_private_key）
-func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secretKey string, testnet bool, hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey, lighterWalletAddr, lighterPrivateKey string) error {
+func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secretKey string, testnet bool) error {
 	log.Printf("🔧 UpdateExchange: userID=%s, id=%s, enabled=%v", userID, id, enabled)
-	if id != "binance" && id != "okx" {
+	if id != "binance" {
 		return fmt.Errorf("unsupported exchange type: %s", id)
 	}
 
@@ -1194,13 +1193,9 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 	setClauses := []string{
 		"enabled = ?",
 		"testnet = ?",
-		"hyperliquid_wallet_addr = ?",
-		"aster_user = ?",
-		"aster_signer = ?",
-		"lighter_wallet_addr = ?",
 		"updated_at = datetime('now')",
 	}
-	args := []interface{}{enabled, testnet, hyperliquidWalletAddr, asterUser, asterSigner, lighterWalletAddr}
+	args := []interface{}{enabled, testnet}
 
 	// 🔒 敏感字段：只在非空时更新（保护现有数据）
 	if apiKey != "" {
@@ -1215,17 +1210,6 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 		args = append(args, encryptedSecretKey)
 	}
 
-	if asterPrivateKey != "" {
-		encryptedAsterPrivateKey := d.encryptSensitiveData(asterPrivateKey)
-		setClauses = append(setClauses, "aster_private_key = ?")
-		args = append(args, encryptedAsterPrivateKey)
-	}
-
-	if lighterPrivateKey != "" {
-		encryptedLighterPrivateKey := d.encryptSensitiveData(lighterPrivateKey)
-		setClauses = append(setClauses, "lighter_private_key = ?")
-		args = append(args, encryptedLighterPrivateKey)
-	}
 
 	// WHERE 条件
 	args = append(args, id, userID)
@@ -1261,9 +1245,6 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 		if id == "binance" {
 			name = "Binance Futures"
 			typ = "cex"
-		} else if id == "okx" {
-			name = "OKX Futures"
-			typ = "cex"
 		} else {
 			name = id + " Exchange"
 			typ = "cex"
@@ -1274,16 +1255,13 @@ func (d *Database) UpdateExchange(userID, id string, enabled bool, apiKey, secre
 		// 加密敏感字段
 		encryptedAPIKey := d.encryptSensitiveData(apiKey)
 		encryptedSecretKey := d.encryptSensitiveData(secretKey)
-		encryptedAsterPrivateKey := d.encryptSensitiveData(asterPrivateKey)
-		encryptedLighterPrivateKey := d.encryptSensitiveData(lighterPrivateKey)
 
 		// 创建用户特定的配置，使用原始的交易所ID
 		_, err = d.db.Exec(`
 			INSERT INTO exchanges (id, user_id, name, type, enabled, api_key, secret_key, testnet,
-			                       hyperliquid_wallet_addr, aster_user, aster_signer, aster_private_key,
-			                       lighter_wallet_addr, lighter_private_key, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
-		`, id, userID, name, typ, enabled, encryptedAPIKey, encryptedSecretKey, testnet, hyperliquidWalletAddr, asterUser, asterSigner, encryptedAsterPrivateKey, lighterWalletAddr, encryptedLighterPrivateKey)
+			                       created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, datetime('now'), datetime('now'))
+		`, id, userID, name, typ, enabled, encryptedAPIKey, encryptedSecretKey, testnet)
 
 		if err != nil {
 			log.Printf("❌ UpdateExchange: 创建记录失败: %v", err)
@@ -1307,16 +1285,15 @@ func (d *Database) CreateAIModel(userID, id, name, provider string, enabled bool
 }
 
 // CreateExchange 创建交易所配置
-func (d *Database) CreateExchange(userID, id, name, typ string, enabled bool, apiKey, secretKey string, testnet bool, hyperliquidWalletAddr, asterUser, asterSigner, asterPrivateKey string) error {
+func (d *Database) CreateExchange(userID, id, name, typ string, enabled bool, apiKey, secretKey string, testnet bool) error {
 	// 加密敏感字段
 	encryptedAPIKey := d.encryptSensitiveData(apiKey)
 	encryptedSecretKey := d.encryptSensitiveData(secretKey)
-	encryptedAsterPrivateKey := d.encryptSensitiveData(asterPrivateKey)
 
 	_, err := d.db.Exec(`
-		INSERT OR IGNORE INTO exchanges (id, user_id, name, type, enabled, api_key, secret_key, testnet, hyperliquid_wallet_addr, aster_user, aster_signer, aster_private_key, lighter_wallet_addr, lighter_private_key)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, '', '')
-	`, id, userID, name, typ, enabled, encryptedAPIKey, encryptedSecretKey, testnet, hyperliquidWalletAddr, asterUser, asterSigner, encryptedAsterPrivateKey)
+		INSERT OR IGNORE INTO exchanges (id, user_id, name, type, enabled, api_key, secret_key, testnet)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, id, userID, name, typ, enabled, encryptedAPIKey, encryptedSecretKey, testnet)
 	return err
 }
 

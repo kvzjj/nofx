@@ -12,6 +12,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -23,44 +24,13 @@ type AutoTraderConfig struct {
 	AIModel string // AI model: "qwen" or "deepseek"
 
 	// Trading platform selection
-	Exchange   string // Exchange type: "binance", "bybit", "okx", "bitget", "hyperliquid", "aster" or "lighter"
+	Exchange   string // Exchange type: "binance"
 	ExchangeID string // Exchange account UUID (for multi-account support)
 
 	// Binance API configuration
 	BinanceAPIKey    string
 	BinanceSecretKey string
 	BinanceTestnet   bool
-
-	// Bybit API configuration
-	BybitAPIKey    string
-	BybitSecretKey string
-
-	// OKX API configuration
-	OKXAPIKey     string
-	OKXSecretKey  string
-	OKXPassphrase string
-	OKXTestnet    bool
-
-	// Bitget API configuration
-	BitgetAPIKey     string
-	BitgetSecretKey  string
-	BitgetPassphrase string
-
-	// Hyperliquid configuration
-	HyperliquidPrivateKey string
-	HyperliquidWalletAddr string
-	HyperliquidTestnet    bool
-
-	// Aster configuration
-	AsterUser       string // Aster main wallet address
-	AsterSigner     string // Aster API wallet address
-	AsterPrivateKey string // Aster API wallet private key
-
-	// LIGHTER configuration
-	LighterWalletAddr       string // LIGHTER wallet address (L1 wallet)
-	LighterPrivateKey       string // LIGHTER L1 private key (for account identification)
-	LighterAPIKeyPrivateKey string // LIGHTER API Key private key (40 bytes, for transaction signing)
-	LighterTestnet          bool   // Whether to use testnet
 
 	// AI configuration
 	UseQwen     bool
@@ -129,7 +99,7 @@ type AutoTrader struct {
 	isRunning             bool
 	isStopping            bool
 	startTime             time.Time          // System start time
-	callCount             int                // AI call count
+	callCount             atomic.Int64       // AI call count (read by API goroutines)
 	positionFirstSeenTime map[string]int64   // Position first seen time (symbol_side -> timestamp in milliseconds)
 	stopMonitorCh         chan struct{}      // Used to stop monitoring goroutine
 	monitorWg             sync.WaitGroup     // Used to wait for monitoring goroutine to finish
@@ -265,9 +235,6 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	case "binance":
 		logger.Infof("🏦 [%s] Using Binance Futures trading (testnet=%v)", config.Name, config.BinanceTestnet)
 		trader = NewFuturesTraderWithTestnet(config.BinanceAPIKey, config.BinanceSecretKey, userID, config.BinanceTestnet)
-	case "okx":
-		logger.Infof("🏦 [%s] Using OKX Futures trading (testnet=%v)", config.Name, config.OKXTestnet)
-		trader = NewOKXTraderWithTestnet(config.OKXAPIKey, config.OKXSecretKey, config.OKXPassphrase, config.OKXTestnet)
 	default:
 		return nil, fmt.Errorf("unsupported trading platform: %s", config.Exchange)
 	}
@@ -336,7 +303,6 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 		equityHighWater:       config.InitialBalance,
 		lastResetTime:         time.Now(),
 		startTime:             time.Now(),
-		callCount:             0,
 		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
 		stopMonitorCh:         make(chan struct{}),
@@ -418,8 +384,6 @@ func (at *AutoTrader) run(stopCh <-chan struct{}) error {
 			return nil
 		}
 	}
-
-	return nil
 }
 
 // Stop stops the automatic trading
@@ -454,10 +418,10 @@ func (at *AutoTrader) IsRunning() bool {
 
 // runCycle runs one trading cycle (using AI full decision-making)
 func (at *AutoTrader) runCycle() error {
-	at.callCount++
+	cycle := at.callCount.Add(1)
 
 	logger.Info("\n" + strings.Repeat("=", 70) + "\n")
-	logger.Infof("⏰ %s - AI decision cycle #%d", time.Now().Format("2006-01-02 15:04:05"), at.callCount)
+	logger.Infof("⏰ %s - AI decision cycle #%d", time.Now().Format("2006-01-02 15:04:05"), cycle)
 	logger.Info(strings.Repeat("=", 70))
 
 	// Create decision record
@@ -581,9 +545,6 @@ func (at *AutoTrader) runCycle() error {
 	// }
 	logger.Info()
 	logger.Info(strings.Repeat("-", 70))
-	// 8. Sort decisions: ensure close positions first, then open positions (prevent position stacking overflow)
-	logger.Info(strings.Repeat("-", 70))
-
 	// 8. Sort decisions: ensure close positions first, then open positions (prevent position stacking overflow)
 	sortedDecisions := sortDecisionsByPriority(aiDecision.Decisions)
 
@@ -805,7 +766,7 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	ctx := &decision.Context{
 		CurrentTime:     time.Now().UTC().Format("2006-01-02 15:04:05 UTC"),
 		RuntimeMinutes:  int(time.Since(at.startTime).Minutes()),
-		CallCount:       at.callCount,
+		CallCount:       int(at.callCount.Load()),
 		BTCETHLeverage:  btcEthLeverage,
 		AltcoinLeverage: altcoinLeverage,
 		Account: decision.AccountInfo{
@@ -1072,6 +1033,9 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 	decision.PositionSizeUSD = plan.PositionSizeUSD
 	decision.Leverage = plan.Leverage
 	decision.RiskUSD = plan.ActualRiskUSD
+	// Keep the execution record consistent with the backend-owned sizing
+	// (the AI-supplied leverage was ignored at parse time and stays 0).
+	actionRecord.Leverage = plan.Leverage
 	if err := at.enforceAccountEntryRisk(positions, balance, plan.PositionSizeUSD, plan.Leverage, marketData); err != nil {
 		return err
 	}
@@ -1200,6 +1164,9 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 	decision.PositionSizeUSD = plan.PositionSizeUSD
 	decision.Leverage = plan.Leverage
 	decision.RiskUSD = plan.ActualRiskUSD
+	// Keep the execution record consistent with the backend-owned sizing
+	// (the AI-supplied leverage was ignored at parse time and stays 0).
+	actionRecord.Leverage = plan.Leverage
 	if err := at.enforceAccountEntryRisk(positions, balance, plan.PositionSizeUSD, plan.Leverage, marketData); err != nil {
 		return err
 	}
@@ -1277,17 +1244,19 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	}
 	actionRecord.Price = marketData.CurrentPrice
 
-	// Get entry price and quantity from exchange API (most accurate)
+	// Get entry price and quantity from exchange API (most accurate).
+	// Use the same tolerant accountNumber parsing as the opening path so
+	// adapters returning string-typed numbers do not silently yield quantity=0
+	// (which would misclassify a partial close as fully closed and cancel the
+	// remaining position's protective orders).
 	var entryPrice float64
 	var quantity float64
 	positions, err := at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
 			if pos["symbol"] == decision.Symbol && pos["side"] == "long" {
-				if ep, ok := pos["entryPrice"].(float64); ok {
-					entryPrice = ep
-				}
-				if amt, ok := pos["positionAmt"].(float64); ok && amt > 0 {
+				entryPrice, _ = accountNumber(pos, "entryPrice", "entry_price")
+				if amt, _ := accountNumber(pos, "positionAmt", "size", "quantity"); amt > 0 {
 					quantity = amt
 				}
 				break
@@ -1335,18 +1304,18 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	}
 	actionRecord.Price = marketData.CurrentPrice
 
-	// Get entry price and quantity from exchange API (most accurate)
+	// Get entry price and quantity from exchange API (most accurate).
+	// Same tolerant parsing as the close-long path; positionAmt is negative for
+	// shorts, so normalize with math.Abs.
 	var entryPrice float64
 	var quantity float64
 	positions, err := at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
 			if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
-				if ep, ok := pos["entryPrice"].(float64); ok {
-					entryPrice = ep
-				}
-				if amt, ok := pos["positionAmt"].(float64); ok {
-					quantity = -amt // positionAmt is negative for short
+				entryPrice, _ = accountNumber(pos, "entryPrice", "entry_price")
+				if amt, _ := accountNumber(pos, "positionAmt", "size", "quantity"); amt != 0 {
+					quantity = math.Abs(amt)
 				}
 				break
 			}
@@ -1490,7 +1459,9 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 	at.lifecycleMutex.Unlock()
 	at.riskMutex.Lock()
 	stopUntil := at.stopUntil
+	lastResetTime := at.lastResetTime
 	at.riskMutex.Unlock()
+	callCount := at.callCount.Load()
 
 	aiProvider := "DeepSeek"
 	if at.config.UseQwen {
@@ -1505,11 +1476,11 @@ func (at *AutoTrader) GetStatus() map[string]interface{} {
 		"is_running":      isRunning,
 		"start_time":      startTime.Format(time.RFC3339),
 		"runtime_minutes": int(time.Since(startTime).Minutes()),
-		"call_count":      at.callCount,
+		"call_count":      callCount,
 		"initial_balance": at.initialBalance,
 		"scan_interval":   at.config.ScanInterval.String(),
 		"stop_until":      stopUntil.Format(time.RFC3339),
-		"last_reset_time": at.lastResetTime.Format(time.RFC3339),
+		"last_reset_time": lastResetTime.Format(time.RFC3339),
 		"ai_provider":     aiProvider,
 	}
 }
@@ -1655,19 +1626,27 @@ func (at *AutoTrader) GetPositions() ([]map[string]interface{}, error) {
 
 	var result []map[string]interface{}
 	for _, pos := range positions {
-		symbol := pos["symbol"].(string)
-		side := pos["side"].(string)
-		entryPrice := pos["entryPrice"].(float64)
-		markPrice := pos["markPrice"].(float64)
-		quantity := pos["positionAmt"].(float64)
+		// Defensive parsing consistent with buildTradingContext: skip malformed
+		// positions instead of panicking on missing or mistyped fields.
+		symbol, _ := pos["symbol"].(string)
+		symbol = strings.ToUpper(strings.TrimSpace(symbol))
+		side, _ := pos["side"].(string)
+		side = strings.ToLower(strings.TrimSpace(side))
+		entryPrice, _ := accountNumber(pos, "entryPrice", "entry_price")
+		markPrice, _ := accountNumber(pos, "markPrice", "mark_price")
+		quantity, _ := accountNumber(pos, "positionAmt", "size", "quantity")
 		if quantity < 0 {
 			quantity = -quantity
 		}
-		unrealizedPnl := pos["unRealizedProfit"].(float64)
-		liquidationPrice := pos["liquidationPrice"].(float64)
+		unrealizedPnl, _ := accountNumber(pos, "unRealizedProfit", "unrealized_pnl", "unrealizedPnl")
+		liquidationPrice, _ := accountNumber(pos, "liquidationPrice", "liquidation_price")
+		if symbol == "" || (side != "long" && side != "short") || entryPrice <= 0 || markPrice <= 0 {
+			logger.Warnf("[%s] skipping malformed exchange position in API view: symbol=%q side=%q entry=%.8f mark=%.8f", at.name, symbol, side, entryPrice, markPrice)
+			continue
+		}
 
 		leverage := 10
-		if lev, ok := pos["leverage"].(float64); ok {
+		if lev, ok := accountNumber(pos, "leverage"); ok && lev > 0 {
 			leverage = int(lev)
 		}
 
@@ -1773,18 +1752,27 @@ func (at *AutoTrader) checkPositionDrawdown() {
 	}
 
 	for _, pos := range positions {
-		symbol := pos["symbol"].(string)
-		side := pos["side"].(string)
-		entryPrice := pos["entryPrice"].(float64)
-		markPrice := pos["markPrice"].(float64)
-		quantity := pos["positionAmt"].(float64)
+		// Defensive parsing: an adapter that returns a malformed or differently
+		// typed position must never panic this monitor goroutine (a panic here
+		// would kill the whole process).
+		symbol, _ := pos["symbol"].(string)
+		symbol = strings.ToUpper(strings.TrimSpace(symbol))
+		side, _ := pos["side"].(string)
+		side = strings.ToLower(strings.TrimSpace(side))
+		entryPrice, _ := accountNumber(pos, "entryPrice", "entry_price")
+		markPrice, _ := accountNumber(pos, "markPrice", "mark_price")
+		quantity, _ := accountNumber(pos, "positionAmt", "size", "quantity")
 		if quantity < 0 {
 			quantity = -quantity // Short position quantity is negative, convert to positive
+		}
+		if symbol == "" || (side != "long" && side != "short") || entryPrice <= 0 || markPrice <= 0 {
+			logger.Warnf("[%s] drawdown monitor skipping malformed exchange position: symbol=%q side=%q entry=%.8f mark=%.8f", at.name, symbol, side, entryPrice, markPrice)
+			continue
 		}
 
 		// Calculate current P&L percentage
 		leverage := 10 // Default value
-		if lev, ok := pos["leverage"].(float64); ok {
+		if lev, ok := accountNumber(pos, "leverage"); ok && lev > 0 {
 			leverage = int(lev)
 		}
 
@@ -1918,8 +1906,12 @@ func getOrderIDString(orderResult map[string]interface{}) string {
 		return fmt.Sprintf("%.0f", v)
 	case string:
 		return v
+	case json.Number:
+		return v.String()
 	default:
-		return fmt.Sprintf("%v", v)
+		// Missing or unexpected orderId types must yield "" so callers treat
+		// the result as unrecordable instead of persisting junk IDs like "<nil>".
+		return ""
 	}
 }
 
@@ -2766,7 +2758,7 @@ func (at *AutoTrader) enforceAccountEntryRisk(positions []map[string]interface{}
 }
 
 func (at *AutoTrader) recordExecutionFailure(err error) {
-	if err == nil || isPolicyRejection(err) {
+	if err == nil || isPolicyRejection(err) || isPendingReconciliation(err) {
 		return
 	}
 	at.riskMutex.Lock()
@@ -2808,21 +2800,31 @@ func (at *AutoTrader) recordExecutionSuccess() {
 	at.riskMutex.Unlock()
 }
 
-// enforcePositionSizeLimits caps an opening order by both the per-order and
-// aggregate open-position notional limits.
-func (at *AutoTrader) enforcePositionSizeLimits(positionSizeUSD float64, positions []map[string]interface{}) float64 {
-	if at.config.StrategyConfig == nil {
-		return positionSizeUSD
+// isPendingReconciliation reports an error whose outcome is not yet known:
+// the exchange accepted the order but confirmation polling timed out, or only
+// a partial fill was observed. The position sync manager reconciles these
+// orders asynchronously, so they must not poison the exchange-health circuit
+// breaker (which would pause all future entries).
+func isPendingReconciliation(err error) bool {
+	if err == nil {
+		return false
 	}
-
-	riskControl := at.config.StrategyConfig.RiskControl
-	capped := decision.CapPositionSize(positionSizeUSD, totalPositionNotional(positions), riskControl)
-	if capped < positionSizeUSD {
-		logger.Infof("  ⚠️ [RISK CONTROL] Opening order %.2f USDT capped to %.2f USDT", positionSizeUSD, capped)
+	message := strings.ToLower(err.Error())
+	markers := []string{
+		"was not confirmed filled",
+		"only partially filled",
+		"only filled",
 	}
-	return capped
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
 }
 
+// totalPositionNotional sums the notional value of all open positions; used
+// to enforce the aggregate position limit during backend sizing.
 func totalPositionNotional(positions []map[string]interface{}) float64 {
 	total := 0.0
 	for _, position := range positions {
@@ -2852,18 +2854,6 @@ func numberValue(value interface{}) float64 {
 	default:
 		return 0
 	}
-}
-
-// enforceMinPositionSize checks minimum position size (CODE ENFORCED)
-func (at *AutoTrader) enforceMinPositionSize(positionSizeUSD float64) error {
-	if at.config.StrategyConfig == nil {
-		return nil
-	}
-
-	if err := decision.ValidateMinimumPositionSize(positionSizeUSD, at.config.StrategyConfig.RiskControl); err != nil {
-		return fmt.Errorf("❌ [RISK CONTROL] %w", err)
-	}
-	return nil
 }
 
 // enforceMaxPositions checks maximum positions count (CODE ENFORCED)

@@ -347,10 +347,8 @@ func (s *TraderStore) GetFullConfig(userID, traderID string) (*TraderFullConfig,
 			a.id, a.user_id, a.name, a.provider, a.enabled, a.api_key,
 			COALESCE(a.custom_api_url, ''), COALESCE(a.custom_model_name, ''), a.created_at, a.updated_at,
 			e.id, COALESCE(e.exchange_type, '') as exchange_type, COALESCE(e.account_name, '') as account_name,
-			e.user_id, e.name, e.type, e.enabled, e.api_key, e.secret_key, COALESCE(e.passphrase, ''), e.testnet,
-			COALESCE(e.hyperliquid_wallet_addr, ''), COALESCE(e.aster_user, ''), COALESCE(e.aster_signer, ''),
-			COALESCE(e.aster_private_key, ''), COALESCE(e.lighter_wallet_addr, ''), COALESCE(e.lighter_private_key, ''),
-			COALESCE(e.lighter_api_key_private_key, ''), e.created_at, e.updated_at
+			e.user_id, e.name, e.type, e.enabled, e.api_key, e.secret_key, e.testnet,
+			e.created_at, e.updated_at
 		FROM traders t
 		JOIN ai_models a ON t.ai_model_id = a.id AND t.user_id = a.user_id
 		JOIN exchanges e ON t.exchange_id = e.id AND t.user_id = e.user_id
@@ -365,9 +363,7 @@ func (s *TraderStore) GetFullConfig(userID, traderID string) (*TraderFullConfig,
 		&aiModel.CustomAPIURL, &aiModel.CustomModelName, &aiModelCreatedAt, &aiModelUpdatedAt,
 		&exchange.ID, &exchange.ExchangeType, &exchange.AccountName,
 		&exchange.UserID, &exchange.Name, &exchange.Type, &exchange.Enabled,
-		&exchange.APIKey, &exchange.SecretKey, &exchange.Passphrase, &exchange.Testnet, &exchange.HyperliquidWalletAddr,
-		&exchange.AsterUser, &exchange.AsterSigner, &exchange.AsterPrivateKey,
-		&exchange.LighterWalletAddr, &exchange.LighterPrivateKey, &exchange.LighterAPIKeyPrivateKey,
+		&exchange.APIKey, &exchange.SecretKey, &exchange.Testnet,
 		&exchangeCreatedAt, &exchangeUpdatedAt,
 	)
 	if err != nil {
@@ -385,10 +381,6 @@ func (s *TraderStore) GetFullConfig(userID, traderID string) (*TraderFullConfig,
 	aiModel.APIKey = s.decrypt(aiModel.APIKey)
 	exchange.APIKey = s.decrypt(exchange.APIKey)
 	exchange.SecretKey = s.decrypt(exchange.SecretKey)
-	exchange.Passphrase = s.decrypt(exchange.Passphrase)
-	exchange.AsterPrivateKey = s.decrypt(exchange.AsterPrivateKey)
-	exchange.LighterPrivateKey = s.decrypt(exchange.LighterPrivateKey)
-	exchange.LighterAPIKeyPrivateKey = s.decrypt(exchange.LighterAPIKeyPrivateKey)
 
 	// Load associated strategy
 	var strategy *Strategy

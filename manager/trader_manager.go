@@ -639,13 +639,11 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 		ID:                         traderCfg.ID,
 		Name:                       traderCfg.Name,
 		AIModel:                    aiModelCfg.Provider,
-		Exchange:                   exchangeCfg.ExchangeType, // Exchange type: binance/okx
+		Exchange:                   exchangeCfg.ExchangeType, // Exchange type: binance
 		ExchangeID:                 exchangeCfg.ID,           // Exchange account UUID (for multi-account)
 		BinanceAPIKey:              "",
 		BinanceSecretKey:           "",
 		BinanceTestnet:             exchangeCfg.Testnet,
-		HyperliquidPrivateKey:      "",
-		HyperliquidTestnet:         exchangeCfg.Testnet,
 		UseQwen:                    aiModelCfg.Provider == "qwen",
 		DeepSeekKey:                "",
 		QwenKey:                    "",
@@ -672,11 +670,6 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 	case "binance":
 		traderConfig.BinanceAPIKey = exchangeCfg.APIKey
 		traderConfig.BinanceSecretKey = exchangeCfg.SecretKey
-	case "okx":
-		traderConfig.OKXAPIKey = exchangeCfg.APIKey
-		traderConfig.OKXSecretKey = exchangeCfg.SecretKey
-		traderConfig.OKXPassphrase = exchangeCfg.Passphrase
-		traderConfig.OKXTestnet = exchangeCfg.Testnet
 	default:
 		return fmt.Errorf("unsupported exchange type: %s", exchangeCfg.ExchangeType)
 	}

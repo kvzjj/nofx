@@ -31,7 +31,6 @@ export default function FooterSection({ language }: FooterSectionProps) {
     ],
     supporters: [
       { name: 'Binance', href: 'https://www.maxweb.red/join?ref=NOFXAI' },
-      { name: 'OKX', href: 'https://www.okx.com/join/1865360' },
       {
         name: 'Amber.ac',
         href: 'https://amber.ac/',

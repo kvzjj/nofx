@@ -2,7 +2,7 @@ import { create } from 'zustand'
 import type { AIModel, Exchange } from '../types'
 import { api } from '../lib/api'
 
-const SUPPORTED_EXCHANGE_TYPES = new Set(['binance', 'okx'])
+const SUPPORTED_EXCHANGE_TYPES = new Set(['binance'])
 
 interface TradersConfigState {
   // 数据

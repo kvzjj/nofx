@@ -6,15 +6,9 @@ interface IconProps {
   className?: string
 }
 
-// 本地图标路径映射
+// 本地图标路径映射（仅支持币安）
 const ICON_PATHS: Record<string, string> = {
   binance: '/exchange-icons/binance.jpg',
-  bybit: '/exchange-icons/bybit.png',
-  okx: '/exchange-icons/okx.svg',
-  bitget: '/exchange-icons/bitget.svg',
-  hyperliquid: '/exchange-icons/hyperliquid.png',
-  aster: '/exchange-icons/aster.svg',
-  lighter: '/exchange-icons/lighter.png',
 }
 
 // 通用图标组件
@@ -80,22 +74,9 @@ export const getExchangeIcon = (
   exchangeType: string,
   props: IconProps = {}
 ) => {
-  const lowerType = exchangeType.toLowerCase()
-  const type = lowerType.includes('binance')
+  const type = exchangeType.toLowerCase().includes('binance')
     ? 'binance'
-    : lowerType.includes('bybit')
-      ? 'bybit'
-      : lowerType.includes('okx')
-        ? 'okx'
-        : lowerType.includes('bitget')
-          ? 'bitget'
-          : lowerType.includes('hyperliquid')
-            ? 'hyperliquid'
-            : lowerType.includes('aster')
-              ? 'aster'
-              : lowerType.includes('lighter')
-                ? 'lighter'
-                : lowerType
+    : exchangeType.toLowerCase()
 
   const iconProps = {
     width: props.width || 24,

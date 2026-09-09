@@ -115,17 +115,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
 
   // 计算派生状态
   const enabledModels = allModels?.filter((m) => m.enabled) || []
-  const enabledExchanges =
-    allExchanges?.filter((e) => {
-      if (!e.enabled) return false
-      if (e.id === 'aster') {
-        return e.asterUser?.trim() && e.asterSigner?.trim()
-      }
-      if (e.id === 'hyperliquid') {
-        return e.hyperliquidWalletAddr?.trim()
-      }
-      return true
-    }) || []
+  const enabledExchanges = allExchanges?.filter((e) => e.enabled) || []
 
   // 检查是否需要显示信号源警告
   const showSignalWarning =

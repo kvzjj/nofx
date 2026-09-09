@@ -9,7 +9,6 @@ import (
 
 	"nofx/decision"
 	"nofx/market"
-	"nofx/pool"
 	"nofx/store"
 
 	"github.com/agiledragon/gomonkey/v2"
@@ -20,41 +19,21 @@ import (
 // AutoTraderTestSuite - Structured testing using testify/suite
 // ============================================================
 
-// AutoTraderTestSuite Test suite for AutoTrader
-// Uses testify/suite to organize tests, providing unified setup/teardown and mock management
+// AutoTraderTestSuite tests the AutoTrader execution pipeline against a mock
+// exchange. Opening tests exercise the backend sizing path, so the mocked
+// market data must provide ATR and volume.
 type AutoTraderTestSuite struct {
 	suite.Suite
 
-	// Test subject
-	autoTrader *AutoTrader
-
-	// Mock dependencies
-	mockTrader *MockTrader
-	mockStore  *store.Store
-
-	// gomonkey patches
-	patches *gomonkey.Patches
-
-	// Test configuration
-	config AutoTraderConfig
+	autoTrader  *AutoTrader
+	mockTrader  *MockTrader
+	patches     *gomonkey.Patches
+	strategyCfg *store.StrategyConfig
 }
 
-// SetupSuite Executed once before the entire test suite starts
-func (s *AutoTraderTestSuite) SetupSuite() {
-	// Can initialize some global resources here
-}
-
-// TearDownSuite Executed once after the entire test suite ends
-func (s *AutoTraderTestSuite) TearDownSuite() {
-	// Clean up global resources
-}
-
-// SetupTest Executed before each test case starts
 func (s *AutoTraderTestSuite) SetupTest() {
-	// Initialize patches
 	s.patches = gomonkey.NewPatches()
 
-	// Create mock objects
 	s.mockTrader = &MockTrader{
 		balance: map[string]interface{}{
 			"totalWalletBalance":    10000.0,
@@ -62,191 +41,146 @@ func (s *AutoTraderTestSuite) SetupTest() {
 			"totalUnrealizedProfit": 100.0,
 		},
 		positions: []map[string]interface{}{},
+		orderStatus: map[string]interface{}{
+			"status":      "FILLED",
+			"avgPrice":    50000.0,
+			"executedQty": 0.05,
+			"commission":  0.5,
+		},
 	}
 
-	// Create temporary store (using nil means no actual store needed in test)
-	s.mockStore = nil
-
-	// Set default configuration
-	s.config = AutoTraderConfig{
-		ID:                   "test_trader",
-		Name:                 "Test Trader",
-		AIModel:              "deepseek",
-		Exchange:             "binance",
-		InitialBalance:       10000.0,
-		ScanInterval:         3 * time.Minute,
-		SystemPromptTemplate: "adaptive",
-		BTCETHLeverage:       10,
-		AltcoinLeverage:      5,
-		IsCrossMargin:        true,
+	s.strategyCfg = &store.StrategyConfig{
+		CoinSource: store.CoinSourceConfig{
+			SourceType:  "static",
+			StaticCoins: []string{"BTC", "ETH"},
+		},
+		RiskControl: store.RiskControlConfig{
+			MaxPositions:         3,
+			BTCETHMaxLeverage:    10,
+			AltcoinMaxLeverage:   5,
+			MinRiskRewardRatio:   0,
+			MinPositionSize:      0,
+			MaxPositionSize:      0,
+			MaxTotalPositionSize: 0,
+		},
 	}
 
-	// Create AutoTrader instance (direct construction, don't call NewAutoTrader to avoid external dependencies)
 	s.autoTrader = &AutoTrader{
-		id:                    s.config.ID,
-		name:                  s.config.Name,
-		aiModel:               s.config.AIModel,
-		exchange:              s.config.Exchange,
-		config:                s.config,
+		id:                    "test_trader",
+		name:                  "Test Trader",
+		aiModel:               "deepseek",
+		exchange:              "binance",
+		config:                AutoTraderConfig{ID: "test_trader", Name: "Test Trader", StrategyConfig: s.strategyCfg},
 		trader:                s.mockTrader,
-		mcpClient:             nil, // No actual MCP Client needed in tests
-		store:                 s.mockStore,
-		initialBalance:        s.config.InitialBalance,
-		systemPromptTemplate:  s.config.SystemPromptTemplate,
-		defaultCoins:          []string{"BTC", "ETH"},
-		tradingCoins:          []string{},
+		store:                 nil,
+		initialBalance:        10000.0,
+		strategyEngine:        decision.NewStrategyEngine(s.strategyCfg),
 		lastResetTime:         time.Now(),
 		startTime:             time.Now(),
-		callCount:             0,
-		isRunning:             false,
 		positionFirstSeenTime: make(map[string]int64),
 		stopMonitorCh:         make(chan struct{}),
 		peakPnLCache:          make(map[string]float64),
-		lastBalanceSyncTime:   time.Now(),
 		userID:                "test_user",
 	}
 }
 
-// TearDownTest Executed after each test case ends
 func (s *AutoTraderTestSuite) TearDownTest() {
-	// Reset gomonkey patches
 	if s.patches != nil {
 		s.patches.Reset()
 	}
 }
 
+// mockMarketData returns market data rich enough for backend entry sizing:
+// price 50000, ATR 400, latest base volume 1000.
+func (s *AutoTraderTestSuite) mockMarketData(price float64) {
+	s.patches.ApplyFunc(market.Get, func(symbol string) (*market.Data, error) {
+		return &market.Data{
+			Symbol:       symbol,
+			CurrentPrice: price,
+			IntradaySeries: &market.IntradayData{
+				ATR14:  400.0,
+				Volume: []float64{900.0, 1000.0},
+			},
+		}, nil
+	})
+}
+
 // ============================================================
-// Level 1: Utility function tests
+// Utility function tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestSortDecisionsByPriority() {
-	tests := []struct {
-		name  string
-		input []decision.Decision
-	}{
-		{
-			name: "Mixed decisions - verify priority sorting",
-			input: []decision.Decision{
-				{Action: "open_long", Symbol: "BTCUSDT"},
-				{Action: "close_short", Symbol: "ETHUSDT"},
-				{Action: "hold", Symbol: "BNBUSDT"},
-				{Action: "open_short", Symbol: "ADAUSDT"},
-				{Action: "close_long", Symbol: "DOGEUSDT"},
-			},
-		},
+	input := []decision.Decision{
+		{Action: "open_long", Symbol: "BTCUSDT"},
+		{Action: "close_short", Symbol: "ETHUSDT"},
+		{Action: "hold", Symbol: "BNBUSDT"},
+		{Action: "open_short", Symbol: "ADAUSDT"},
+		{Action: "close_long", Symbol: "DOGEUSDT"},
 	}
 
-	for _, tt := range tests {
-		s.Run(tt.name, func() {
-			result := sortDecisionsByPriority(tt.input)
+	result := sortDecisionsByPriority(input)
+	s.Equal(len(input), len(result))
 
-			s.Equal(len(tt.input), len(result), "Result length should be the same")
-
-			// Verify priority is increasing
-			getActionPriority := func(action string) int {
-				switch action {
-				case "close_long", "close_short":
-					return 1
-				case "open_long", "open_short":
-					return 2
-				case "hold", "wait":
-					return 3
-				default:
-					return 999
-				}
-			}
-
-			for i := 0; i < len(result)-1; i++ {
-				currentPriority := getActionPriority(result[i].Action)
-				nextPriority := getActionPriority(result[i+1].Action)
-				s.LessOrEqual(currentPriority, nextPriority, "Priority should be increasing")
-			}
-		})
+	getActionPriority := func(action string) int {
+		switch action {
+		case "close_long", "close_short":
+			return 1
+		case "open_long", "open_short":
+			return 2
+		case "hold", "wait":
+			return 3
+		default:
+			return 999
+		}
 	}
-}
-
-func (s *AutoTraderTestSuite) TestNormalizeSymbol() {
-	tests := []struct {
-		name     string
-		input    string
-		expected string
-	}{
-		{"Already standard format", "BTCUSDT", "BTCUSDT"},
-		{"Lowercase to uppercase", "btcusdt", "BTCUSDT"},
-		{"Coin name only - add USDT", "BTC", "BTCUSDT"},
-		{"With spaces - remove spaces", " BTC ", "BTCUSDT"},
-	}
-
-	for _, tt := range tests {
-		s.Run(tt.name, func() {
-			result := normalizeSymbol(tt.input)
-			s.Equal(tt.expected, result)
-		})
+	for i := 0; i < len(result)-1; i++ {
+		s.LessOrEqual(getActionPriority(result[i].Action), getActionPriority(result[i+1].Action),
+			"close actions must execute before open actions")
 	}
 }
 
 // ============================================================
-// Level 2: Getter/Setter tests
+// Getter/Setter tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestGettersAndSetters() {
-	s.Run("GetID", func() {
-		s.Equal("test_trader", s.autoTrader.GetID())
-	})
+	s.Equal("test_trader", s.autoTrader.GetID())
+	s.Equal("Test Trader", s.autoTrader.GetName())
+	s.Equal("deepseek", s.autoTrader.GetAIModel())
+	s.Equal("binance", s.autoTrader.GetExchange())
 
-	s.Run("GetName", func() {
-		s.Equal("Test Trader", s.autoTrader.GetName())
-	})
-
-	s.Run("SetSystemPromptTemplate", func() {
-		s.autoTrader.SetSystemPromptTemplate("aggressive")
-		s.Equal("aggressive", s.autoTrader.GetSystemPromptTemplate())
-	})
-
-	s.Run("SetCustomPrompt", func() {
-		s.autoTrader.SetCustomPrompt("custom prompt")
-		s.Equal("custom prompt", s.autoTrader.customPrompt)
-	})
+	s.autoTrader.SetCustomPrompt("custom prompt")
+	s.Equal("custom prompt", s.autoTrader.customPrompt)
 }
 
 // ============================================================
-// Level 3: PeakPnL cache tests
+// PeakPnL cache tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestPeakPnLCache() {
-	s.Run("UpdatePeakPnL_first record", func() {
-		s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 10.5)
-		cache := s.autoTrader.GetPeakPnLCache()
-		s.Equal(10.5, cache["BTCUSDT_long"])
-	})
+	s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 10.5)
+	s.Equal(10.5, s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"])
 
-	s.Run("UpdatePeakPnL_update to higher value", func() {
-		s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 15.0)
-		cache := s.autoTrader.GetPeakPnLCache()
-		s.Equal(15.0, cache["BTCUSDT_long"])
-	})
+	s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 15.0)
+	s.Equal(15.0, s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"])
 
-	s.Run("UpdatePeakPnL_do not update to lower value", func() {
-		s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 12.0)
-		cache := s.autoTrader.GetPeakPnLCache()
-		s.Equal(15.0, cache["BTCUSDT_long"], "Peak value should remain unchanged")
-	})
+	s.autoTrader.UpdatePeakPnL("BTCUSDT", "long", 12.0)
+	s.Equal(15.0, s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"], "peak must not decrease")
 
-	s.Run("ClearPeakPnLCache", func() {
-		s.autoTrader.ClearPeakPnLCache("BTCUSDT", "long")
-		cache := s.autoTrader.GetPeakPnLCache()
-		_, exists := cache["BTCUSDT_long"]
-		s.False(exists, "Should be cleared")
-	})
+	s.autoTrader.ClearPeakPnLCache("BTCUSDT", "long")
+	_, exists := s.autoTrader.GetPeakPnLCache()["BTCUSDT_long"]
+	s.False(exists, "cleared key must not exist")
 }
 
 // ============================================================
-// Level 4: GetStatus tests
+// GetStatus tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestGetStatus() {
+	s.autoTrader.lifecycleMutex.Lock()
 	s.autoTrader.isRunning = true
-	s.autoTrader.callCount = 15
+	s.autoTrader.lifecycleMutex.Unlock()
+	s.autoTrader.callCount.Store(15)
 
 	status := s.autoTrader.GetStatus()
 
@@ -255,12 +189,12 @@ func (s *AutoTraderTestSuite) TestGetStatus() {
 	s.Equal("deepseek", status["ai_model"])
 	s.Equal("binance", status["exchange"])
 	s.True(status["is_running"].(bool))
-	s.Equal(15, status["call_count"])
+	s.Equal(int64(15), status["call_count"])
 	s.Equal(10000.0, status["initial_balance"])
 }
 
 // ============================================================
-// Level 5: GetAccountInfo tests
+// GetAccountInfo tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestGetAccountInfo() {
@@ -268,8 +202,6 @@ func (s *AutoTraderTestSuite) TestGetAccountInfo() {
 
 	s.NoError(err)
 	s.NotNil(accountInfo)
-
-	// Verify core fields and values
 	s.Equal(10100.0, accountInfo["total_equity"]) // 10000 + 100
 	s.Equal(8000.0, accountInfo["available_balance"])
 	s.Equal(100.0, accountInfo["total_pnl"]) // 10100 - 10000
@@ -306,22 +238,19 @@ func (s *AutoTraderTestSuite) TestGetAccountInfoRejectsMissingBalanceTotals() {
 }
 
 // ============================================================
-// Level 6: GetPositions tests
+// GetPositions tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestGetPositions() {
 	s.Run("No positions", func() {
 		positions, err := s.autoTrader.GetPositions()
-
 		s.NoError(err)
-		// positions may be nil or empty array, both are valid
 		if positions != nil {
 			s.Equal(0, len(positions))
 		}
 	})
 
 	s.Run("Has positions", func() {
-		// Set mock positions
 		s.mockTrader.positions = []map[string]interface{}{
 			{
 				"symbol":           "BTCUSDT",
@@ -349,89 +278,31 @@ func (s *AutoTraderTestSuite) TestGetPositions() {
 }
 
 // ============================================================
-// Level 7: getCandidateCoins tests
-// ============================================================
-
-func (s *AutoTraderTestSuite) TestGetCandidateCoins() {
-	s.Run("Use database default coins", func() {
-		s.autoTrader.defaultCoins = []string{"BTC", "ETH", "BNB"}
-		s.autoTrader.tradingCoins = []string{} // Empty custom coins
-
-		coins, err := s.autoTrader.getCandidateCoins()
-
-		s.NoError(err)
-		s.Equal(3, len(coins))
-		s.Equal("BTCUSDT", coins[0].Symbol)
-		s.Equal("ETHUSDT", coins[1].Symbol)
-		s.Equal("BNBUSDT", coins[2].Symbol)
-		s.Contains(coins[0].Sources, "default")
-	})
-
-	s.Run("Use custom coins", func() {
-		s.autoTrader.tradingCoins = []string{"SOL", "AVAX"}
-
-		coins, err := s.autoTrader.getCandidateCoins()
-
-		s.NoError(err)
-		s.Equal(2, len(coins))
-		s.Equal("SOLUSDT", coins[0].Symbol)
-		s.Equal("AVAXUSDT", coins[1].Symbol)
-		s.Contains(coins[0].Sources, "custom")
-	})
-
-	s.Run("Use AI500+OI as fallback", func() {
-		s.autoTrader.defaultCoins = []string{} // Empty default coins
-		s.autoTrader.tradingCoins = []string{} // Empty custom coins
-
-		// Mock pool.GetMergedCoinPool
-		s.patches.ApplyFunc(pool.GetMergedCoinPool, func(ai500Limit int) (*pool.MergedCoinPool, error) {
-			return &pool.MergedCoinPool{
-				AllSymbols: []string{"BTCUSDT", "ETHUSDT"},
-				SymbolSources: map[string][]string{
-					"BTCUSDT": {"ai500", "oi_top"},
-					"ETHUSDT": {"ai500"},
-				},
-			}, nil
-		})
-
-		coins, err := s.autoTrader.getCandidateCoins()
-
-		s.NoError(err)
-		s.Equal(2, len(coins))
-	})
-}
-
-// ============================================================
-// Level 8: buildTradingContext tests
+// buildTradingContext tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestBuildTradingContext() {
-	// Mock market.Get
-	s.patches.ApplyFunc(market.Get, func(symbol string) (*market.Data, error) {
-		return &market.Data{Symbol: symbol, CurrentPrice: 50000.0}, nil
-	})
-
 	ctx, err := s.autoTrader.buildTradingContext()
 
 	s.NoError(err)
 	s.NotNil(ctx)
-
-	// Verify core fields
 	s.Equal(10100.0, ctx.Account.TotalEquity) // 10000 + 100
 	s.Equal(8000.0, ctx.Account.AvailableBalance)
 	s.Equal(10, ctx.BTCETHLeverage)
 	s.Equal(5, ctx.AltcoinLeverage)
+	s.Equal(2, len(ctx.CandidateCoins))
 }
 
 // ============================================================
-// Level 9: Trade execution tests
+// Trade execution tests (backend sizing pipeline)
 // ============================================================
 
-// TestExecuteOpenPosition Test open position operation (common for long and short)
 func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 	tests := []struct {
 		name          string
 		action        string
+		stopLoss      float64 // long: below entry, short: above entry
+		takeProfit    float64 // long: above entry, short: below entry
 		expectedOrder int64
 		existingSide  string
 		availBalance  float64
@@ -441,6 +312,8 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 		{
 			name:          "Successfully open long",
 			action:        "open_long",
+			stopLoss:      49000,
+			takeProfit:    52000,
 			expectedOrder: 123456,
 			availBalance:  8000.0,
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
@@ -450,6 +323,8 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 		{
 			name:          "Successfully open short",
 			action:        "open_short",
+			stopLoss:      51000,
+			takeProfit:    48000,
 			expectedOrder: 123457,
 			availBalance:  8000.0,
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
@@ -457,19 +332,23 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 			},
 		},
 		{
-			name:         "Long - insufficient margin",
+			name:         "Long - zero available balance",
 			action:       "open_long",
+			stopLoss:     49000,
+			takeProfit:   52000,
 			availBalance: 0.0,
-			expectedErr:  "Insufficient margin",
+			expectedErr:  "must be greater than 0",
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
 				return s.autoTrader.executeOpenLongWithRecord(d, a)
 			},
 		},
 		{
-			name:         "Short - insufficient margin",
+			name:         "Short - zero available balance",
 			action:       "open_short",
+			stopLoss:     51000,
+			takeProfit:   48000,
 			availBalance: 0.0,
-			expectedErr:  "Insufficient margin",
+			expectedErr:  "must be greater than 0",
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
 				return s.autoTrader.executeOpenShortWithRecord(d, a)
 			},
@@ -477,9 +356,11 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 		{
 			name:         "Long - already has same side position",
 			action:       "open_long",
+			stopLoss:     49000,
+			takeProfit:   52000,
 			existingSide: "long",
 			availBalance: 8000.0,
-			expectedErr:  "Already has long position",
+			expectedErr:  "already has long position",
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
 				return s.autoTrader.executeOpenLongWithRecord(d, a)
 			},
@@ -487,9 +368,11 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 		{
 			name:         "Short - already has same side position",
 			action:       "open_short",
+			stopLoss:     51000,
+			takeProfit:   48000,
 			existingSide: "short",
 			availBalance: 8000.0,
-			expectedErr:  "Already has short position",
+			expectedErr:  "already has short position",
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
 				return s.autoTrader.executeOpenShortWithRecord(d, a)
 			},
@@ -499,9 +382,7 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 	for _, tt := range tests {
 		time.Sleep(time.Millisecond)
 		s.Run(tt.name, func() {
-			s.patches.ApplyFunc(market.Get, func(symbol string) (*market.Data, error) {
-				return &market.Data{Symbol: symbol, CurrentPrice: 50000.0}, nil
-			})
+			s.mockMarketData(50000.0)
 
 			s.mockTrader.balance["availableBalance"] = tt.availBalance
 			if tt.existingSide != "" {
@@ -510,10 +391,12 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 				s.mockTrader.positions = []map[string]interface{}{}
 			}
 
-			decision := &decision.Decision{Action: tt.action, Symbol: "BTCUSDT", PositionSizeUSD: 1000.0, Leverage: 10}
+			// Backend owns sizing: only direction, invalidation, and target
+			// come from the decision.
+			d := &decision.Decision{Action: tt.action, Symbol: "BTCUSDT", StopLoss: tt.stopLoss, TakeProfit: tt.takeProfit}
 			actionRecord := &store.DecisionAction{Action: tt.action, Symbol: "BTCUSDT"}
 
-			err := tt.executeFn(decision, actionRecord)
+			err := tt.executeFn(d, actionRecord)
 
 			if tt.expectedErr != "" {
 				s.Error(err)
@@ -523,6 +406,11 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 				s.Equal(tt.expectedOrder, actionRecord.OrderID)
 				s.Greater(actionRecord.Quantity, 0.0)
 				s.Equal(50000.0, actionRecord.Price)
+				// Backend sizing must overwrite the ignored AI-supplied fields.
+				s.Greater(d.Leverage, 0)
+				s.Greater(d.PositionSizeUSD, 0.0)
+				s.Greater(d.RiskUSD, 0.0)
+				s.Equal(d.Leverage, actionRecord.Leverage)
 			}
 
 			// Restore default state
@@ -532,29 +420,28 @@ func (s *AutoTraderTestSuite) TestExecuteOpenPosition() {
 	}
 }
 
-// TestExecuteClosePosition Test close position operation (common for long and short)
 func (s *AutoTraderTestSuite) TestExecuteClosePosition() {
 	tests := []struct {
-		name          string
-		action        string
-		currentPrice  float64
-		expectedOrder int64
-		executeFn     func(*decision.Decision, *store.DecisionAction) error
+		name         string
+		action       string
+		currentPrice float64
+		orderID      int64
+		executeFn    func(*decision.Decision, *store.DecisionAction) error
 	}{
 		{
-			name:          "Successfully close long",
-			action:        "close_long",
-			currentPrice:  51000.0,
-			expectedOrder: 123458,
+			name:         "Successfully close long",
+			action:       "close_long",
+			currentPrice: 51000.0,
+			orderID:      123458,
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
 				return s.autoTrader.executeCloseLongWithRecord(d, a)
 			},
 		},
 		{
-			name:          "Successfully close short",
-			action:        "close_short",
-			currentPrice:  49000.0,
-			expectedOrder: 123459,
+			name:         "Successfully close short",
+			action:       "close_short",
+			currentPrice: 49000.0,
+			orderID:      123459,
 			executeFn: func(d *decision.Decision, a *store.DecisionAction) error {
 				return s.autoTrader.executeCloseShortWithRecord(d, a)
 			},
@@ -564,82 +451,64 @@ func (s *AutoTraderTestSuite) TestExecuteClosePosition() {
 	for _, tt := range tests {
 		time.Sleep(time.Millisecond)
 		s.Run(tt.name, func() {
-			s.patches.ApplyFunc(market.Get, func(symbol string) (*market.Data, error) {
-				return &market.Data{Symbol: symbol, CurrentPrice: tt.currentPrice}, nil
-			})
+			s.mockMarketData(tt.currentPrice)
 
-			decision := &decision.Decision{Action: tt.action, Symbol: "BTCUSDT"}
+			d := &decision.Decision{Action: tt.action, Symbol: "BTCUSDT"}
 			actionRecord := &store.DecisionAction{Action: tt.action, Symbol: "BTCUSDT"}
 
-			err := tt.executeFn(decision, actionRecord)
+			err := tt.executeFn(d, actionRecord)
 
 			s.NoError(err)
-			s.Equal(tt.expectedOrder, actionRecord.OrderID)
+			s.Equal(tt.orderID, actionRecord.OrderID)
 			s.Equal(tt.currentPrice, actionRecord.Price)
 		})
 	}
 }
 
 // ============================================================
-// Level 10: executeDecisionWithRecord routing tests
+// executeDecisionWithRecord routing tests
 // ============================================================
 
 func (s *AutoTraderTestSuite) TestExecuteDecisionWithRecord() {
-	// Mock market.Get
-	s.patches.ApplyFunc(market.Get, func(symbol string) (*market.Data, error) {
-		return &market.Data{
-			Symbol:       symbol,
-			CurrentPrice: 50000.0,
-		}, nil
-	})
+	s.mockMarketData(50000.0)
 
 	s.Run("Route to open_long", func() {
-		decision := &decision.Decision{
-			Action:          "open_long",
-			Symbol:          "BTCUSDT",
-			PositionSizeUSD: 1000.0,
-			Leverage:        10,
-		}
+		d := &decision.Decision{Action: "open_long", Symbol: "BTCUSDT", StopLoss: 49000, TakeProfit: 52000}
 		actionRecord := &store.DecisionAction{}
 
-		err := s.autoTrader.executeDecisionWithRecord(decision, actionRecord)
+		err := s.autoTrader.executeDecisionWithRecord(d, actionRecord)
 		s.NoError(err)
 	})
 
 	s.Run("Route to close_long", func() {
-		decision := &decision.Decision{
-			Action: "close_long",
-			Symbol: "BTCUSDT",
-		}
+		d := &decision.Decision{Action: "close_long", Symbol: "BTCUSDT"}
 		actionRecord := &store.DecisionAction{}
 
-		err := s.autoTrader.executeDecisionWithRecord(decision, actionRecord)
+		err := s.autoTrader.executeDecisionWithRecord(d, actionRecord)
 		s.NoError(err)
 	})
 
 	s.Run("Route to hold - no execution", func() {
-		decision := &decision.Decision{
-			Action: "hold",
-			Symbol: "BTCUSDT",
-		}
+		d := &decision.Decision{Action: "hold", Symbol: "BTCUSDT"}
 		actionRecord := &store.DecisionAction{}
 
-		err := s.autoTrader.executeDecisionWithRecord(decision, actionRecord)
+		err := s.autoTrader.executeDecisionWithRecord(d, actionRecord)
 		s.NoError(err)
 	})
 
 	s.Run("Unknown action returns error", func() {
-		decision := &decision.Decision{
-			Action: "unknown_action",
-			Symbol: "BTCUSDT",
-		}
+		d := &decision.Decision{Action: "unknown_action", Symbol: "BTCUSDT"}
 		actionRecord := &store.DecisionAction{}
 
-		err := s.autoTrader.executeDecisionWithRecord(decision, actionRecord)
+		err := s.autoTrader.executeDecisionWithRecord(d, actionRecord)
 		s.Error(err)
-		s.Contains(err.Error(), "Unknown action")
+		s.Contains(err.Error(), "unknown action")
 	})
 }
+
+// ============================================================
+// Drawdown monitor tests
+// ============================================================
 
 func (s *AutoTraderTestSuite) TestCheckPositionDrawdown() {
 	tests := []struct {
@@ -661,6 +530,18 @@ func (s *AutoTraderTestSuite) TestCheckPositionDrawdown() {
 		{
 			name:           "No positions - no panic",
 			setupPositions: func() { s.mockTrader.positions = []map[string]interface{}{} },
+			skipCacheCheck: true,
+		},
+		{
+			name: "Malformed positions - no panic",
+			setupPositions: func() {
+				s.mockTrader.positions = []map[string]interface{}{
+					{"symbol": "BTCUSDT"},               // missing side/prices
+					{"side": "long", "entryPrice": 1.0}, // missing symbol
+					{"symbol": "ETHUSDT", "side": "long", "entryPrice": "3000", "markPrice": "3010", "positionAmt": "0.5", "leverage": 10.0}, // string-typed prices
+					{"symbol": "SOLUSDT", "side": "long", "entryPrice": 20.0, "markPrice": 20.4, "positionAmt": 10.0, "leverage": 10.0},
+				}
+			},
 			skipCacheCheck: true,
 		},
 		{
@@ -760,32 +641,20 @@ func (s *AutoTraderTestSuite) TestCheckPositionDrawdown() {
 				}
 			}
 
-			// Clean up state
 			s.mockTrader.positions = []map[string]interface{}{}
 		})
 	}
 }
 
 // ============================================================
-// Mock implementations
+// Mock exchange implementation
 // ============================================================
 
-// MockDatabase Mock database
-type MockDatabase struct {
-	shouldFail bool
-}
-
-func (m *MockDatabase) UpdateTraderInitialBalance(userID, traderID string, newBalance float64) error {
-	if m.shouldFail {
-		return errors.New("database error")
-	}
-	return nil
-}
-
-// MockTrader Enhanced version (with error control)
+// MockTrader implements the full trader.Trader interface with error control.
 type MockTrader struct {
 	balance              map[string]interface{}
 	positions            []map[string]interface{}
+	orderStatus          map[string]interface{}
 	shouldFailBalance    bool
 	shouldFailPositions  bool
 	shouldFailOpenLong   bool
@@ -822,15 +691,17 @@ func (m *MockTrader) OpenLong(symbol string, quantity float64, leverage int) (ma
 		return nil, errors.New("failed to open long")
 	}
 	return map[string]interface{}{
-		"orderId": int64(123456),
-		"symbol":  symbol,
+		"orderId":   int64(123456),
+		"symbol":    symbol,
+		"orderType": "MARKET",
 	}, nil
 }
 
 func (m *MockTrader) OpenShort(symbol string, quantity float64, leverage int) (map[string]interface{}, error) {
 	return map[string]interface{}{
-		"orderId": int64(123457),
-		"symbol":  symbol,
+		"orderId":   int64(123457),
+		"symbol":    symbol,
+		"orderType": "MARKET",
 	}, nil
 }
 
@@ -839,8 +710,9 @@ func (m *MockTrader) CloseLong(symbol string, quantity float64) (map[string]inte
 		return nil, errors.New("failed to close long")
 	}
 	return map[string]interface{}{
-		"orderId": int64(123458),
-		"symbol":  symbol,
+		"orderId":   int64(123458),
+		"symbol":    symbol,
+		"orderType": "MARKET",
 	}, nil
 }
 
@@ -849,22 +721,17 @@ func (m *MockTrader) CloseShort(symbol string, quantity float64) (map[string]int
 		return nil, errors.New("failed to close short")
 	}
 	return map[string]interface{}{
-		"orderId": int64(123459),
-		"symbol":  symbol,
+		"orderId":   int64(123459),
+		"symbol":    symbol,
+		"orderType": "MARKET",
 	}, nil
 }
 
-func (m *MockTrader) SetLeverage(symbol string, leverage int) error {
-	return nil
-}
+func (m *MockTrader) SetLeverage(symbol string, leverage int) error { return nil }
 
-func (m *MockTrader) SetMarginMode(symbol string, isCrossMargin bool) error {
-	return nil
-}
+func (m *MockTrader) SetMarginMode(symbol string, isCrossMargin bool) error { return nil }
 
-func (m *MockTrader) GetMarketPrice(symbol string) (float64, error) {
-	return 50000.0, nil
-}
+func (m *MockTrader) GetMarketPrice(symbol string) (float64, error) { return 50000.0, nil }
 
 func (m *MockTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
 	return nil
@@ -874,37 +741,41 @@ func (m *MockTrader) SetTakeProfit(symbol string, positionSide string, quantity,
 	return nil
 }
 
-func (m *MockTrader) CancelStopLossOrders(symbol string) error {
-	return nil
-}
-
-func (m *MockTrader) CancelTakeProfitOrders(symbol string) error {
-	return nil
-}
-
-func (m *MockTrader) CancelAllOrders(symbol string) error {
-	return nil
-}
-
-func (m *MockTrader) CancelStopOrders(symbol string) error {
-	return nil
-}
+func (m *MockTrader) CancelStopLossOrders(symbol string) error   { return nil }
+func (m *MockTrader) CancelTakeProfitOrders(symbol string) error { return nil }
+func (m *MockTrader) CancelAllOrders(symbol string) error        { return nil }
+func (m *MockTrader) CancelStopOrders(symbol string) error       { return nil }
 
 func (m *MockTrader) FormatQuantity(symbol string, quantity float64) (string, error) {
 	return fmt.Sprintf("%.4f", quantity), nil
+}
+
+func (m *MockTrader) GetOrderStatus(symbol string, orderID string) (map[string]interface{}, error) {
+	if m.orderStatus == nil {
+		return map[string]interface{}{
+			"status":      "FILLED",
+			"avgPrice":    50000.0,
+			"executedQty": 0.05,
+			"commission":  0.5,
+		}, nil
+	}
+	return m.orderStatus, nil
+}
+
+func (m *MockTrader) GetClosedPnL(startTime time.Time, limit int) ([]ClosedPnLRecord, error) {
+	return nil, nil
 }
 
 // ============================================================
 // Test suite entry point
 // ============================================================
 
-// TestAutoTraderTestSuite Run AutoTrader test suite
 func TestAutoTraderTestSuite(t *testing.T) {
 	suite.Run(t, new(AutoTraderTestSuite))
 }
 
 // ============================================================
-// Independent unit tests - calculatePnLPercentage function tests
+// Independent unit tests - calculatePnLPercentage
 // ============================================================
 
 func TestCalculatePnLPercentage(t *testing.T) {
@@ -914,67 +785,20 @@ func TestCalculatePnLPercentage(t *testing.T) {
 		marginUsed    float64
 		expected      float64
 	}{
-		{
-			name:          "Normal profit - 10x leverage",
-			unrealizedPnl: 100.0,  // 100 USDT profit
-			marginUsed:    1000.0, // 1000 USDT margin
-			expected:      10.0,   // 10% return
-		},
-		{
-			name:          "Normal loss - 10x leverage",
-			unrealizedPnl: -50.0,  // 50 USDT loss
-			marginUsed:    1000.0, // 1000 USDT margin
-			expected:      -5.0,   // -5% return
-		},
-		{
-			name:          "High leverage profit - 1% price increase, 20x leverage",
-			unrealizedPnl: 200.0,  // 200 USDT profit
-			marginUsed:    1000.0, // 1000 USDT margin
-			expected:      20.0,   // 20% return
-		},
-		{
-			name:          "Zero margin - edge case",
-			unrealizedPnl: 100.0,
-			marginUsed:    0.0,
-			expected:      0.0, // Should return 0 instead of division by zero error
-		},
-		{
-			name:          "Negative margin - edge case",
-			unrealizedPnl: 100.0,
-			marginUsed:    -1000.0,
-			expected:      0.0, // Should return 0 (abnormal case)
-		},
-		{
-			name:          "Zero PnL",
-			unrealizedPnl: 0.0,
-			marginUsed:    1000.0,
-			expected:      0.0,
-		},
-		{
-			name:          "Small trade",
-			unrealizedPnl: 0.5,
-			marginUsed:    10.0,
-			expected:      5.0,
-		},
-		{
-			name:          "Large profit",
-			unrealizedPnl: 5000.0,
-			marginUsed:    10000.0,
-			expected:      50.0,
-		},
-		{
-			name:          "Tiny margin",
-			unrealizedPnl: 1.0,
-			marginUsed:    0.01,
-			expected:      10000.0, // 100x return
-		},
+		{"Normal profit - 10x leverage", 100.0, 1000.0, 10.0},
+		{"Normal loss - 10x leverage", -50.0, 1000.0, -5.0},
+		{"High leverage profit", 200.0, 1000.0, 20.0},
+		{"Zero margin - edge case", 100.0, 0.0, 0.0},
+		{"Negative margin - edge case", 100.0, -1000.0, 0.0},
+		{"Zero PnL", 0.0, 1000.0, 0.0},
+		{"Small trade", 0.5, 10.0, 5.0},
+		{"Large profit", 5000.0, 10000.0, 50.0},
+		{"Tiny margin", 1.0, 0.01, 10000.0},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			result := calculatePnLPercentage(tt.unrealizedPnl, tt.marginUsed)
-
-			// Use precision comparison to avoid floating point errors
 			if math.Abs(result-tt.expected) > 0.0001 {
 				t.Errorf("calculatePnLPercentage(%v, %v) = %v, want %v",
 					tt.unrealizedPnl, tt.marginUsed, result, tt.expected)
@@ -983,38 +807,22 @@ func TestCalculatePnLPercentage(t *testing.T) {
 	}
 }
 
-// TestCalculatePnLPercentage_RealWorldScenarios Real world scenario tests
 func TestCalculatePnLPercentage_RealWorldScenarios(t *testing.T) {
-	t.Run("BTC 10x leverage, 2% price increase", func(t *testing.T) {
-		// Open: 1000 USDT margin, 10x leverage = 10000 USDT position
-		// 2% price increase = 200 USDT profit
-		// Return = 200 / 1000 = 20%
-		result := calculatePnLPercentage(200.0, 1000.0)
-		expected := 20.0
-		if math.Abs(result-expected) > 0.0001 {
-			t.Errorf("BTC scenario: got %v, want %v", result, expected)
-		}
-	})
+	scenarios := []struct {
+		name                  string
+		pnl, margin, expected float64
+	}{
+		{"BTC 10x leverage, 2% price increase", 200.0, 1000.0, 20.0},
+		{"ETH 5x leverage, 3% price decrease", -300.0, 2000.0, -15.0},
+		{"SOL 20x leverage, 0.5% price increase", 50.0, 500.0, 10.0},
+	}
 
-	t.Run("ETH 5x leverage, 3% price decrease", func(t *testing.T) {
-		// Open: 2000 USDT margin, 5x leverage = 10000 USDT position
-		// 3% price decrease = -300 USDT loss
-		// Return = -300 / 2000 = -15%
-		result := calculatePnLPercentage(-300.0, 2000.0)
-		expected := -15.0
-		if math.Abs(result-expected) > 0.0001 {
-			t.Errorf("ETH scenario: got %v, want %v", result, expected)
-		}
-	})
-
-	t.Run("SOL 20x leverage, 0.5% price increase", func(t *testing.T) {
-		// Open: 500 USDT margin, 20x leverage = 10000 USDT position
-		// 0.5% price increase = 50 USDT profit
-		// Return = 50 / 500 = 10%
-		result := calculatePnLPercentage(50.0, 500.0)
-		expected := 10.0
-		if math.Abs(result-expected) > 0.0001 {
-			t.Errorf("SOL scenario: got %v, want %v", result, expected)
-		}
-	})
+	for _, tt := range scenarios {
+		t.Run(tt.name, func(t *testing.T) {
+			result := calculatePnLPercentage(tt.pnl, tt.margin)
+			if math.Abs(result-tt.expected) > 0.0001 {
+				t.Errorf("got %v, want %v", result, tt.expected)
+			}
+		})
+	}
 }
