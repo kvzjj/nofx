@@ -22,6 +22,7 @@ import {
   TrendingUp as ArrowUp,
   TrendingDown as ArrowDown,
 } from 'lucide-react'
+import { downsampleLTTB } from '../lib/format'
 
 interface EquityPoint {
   timestamp: string
@@ -41,7 +42,11 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
   const { user, token } = useAuth()
   const [displayMode, setDisplayMode] = useState<'dollar' | 'percent'>('dollar')
 
-  const { data: history, error, isLoading } = useSWR<EquityPoint[]>(
+  const {
+    data: history,
+    error,
+    isLoading,
+  } = useSWR<EquityPoint[]>(
     user && token && traderId ? `equity-history-${traderId}` : null,
     () => api.getEquityHistory(traderId),
     {
@@ -66,7 +71,10 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
     return (
       <div className={embedded ? 'p-6' : 'binance-card p-6'}>
         {!embedded && (
-          <h3 className="text-lg font-semibold mb-6" style={{ color: '#EAECEF' }}>
+          <h3
+            className="text-lg font-semibold mb-6"
+            style={{ color: '#EAECEF' }}
+          >
             {t('accountEquityCurve', language)}
           </h3>
         )}
@@ -108,7 +116,10 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
     return (
       <div className={embedded ? 'p-6' : 'binance-card p-6'}>
         {!embedded && (
-          <h3 className="text-lg font-semibold mb-6" style={{ color: '#EAECEF' }}>
+          <h3
+            className="text-lg font-semibold mb-6"
+            style={{ color: '#EAECEF' }}
+          >
             {t('accountEquityCurve', language)}
           </h3>
         )}
@@ -128,10 +139,19 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
   // 限制显示最近的数据点（性能优化）
   // 如果数据超过2000个点，只显示最近2000个
   const MAX_DISPLAY_POINTS = 2000
-  const displayHistory =
+  const recentHistory =
     validHistory.length > MAX_DISPLAY_POINTS
       ? validHistory.slice(-MAX_DISPLAY_POINTS)
       : validHistory
+
+  // LTTB 降采样：超过 400 个点时降到 400，保留曲线形状的同时大幅降低渲染开销
+  const MAX_RENDER_POINTS = 400
+  const displayHistory = downsampleLTTB(
+    recentHistory,
+    MAX_RENDER_POINTS,
+    (p) => new Date(p.timestamp).getTime(),
+    (p) => p.total_equity
+  )
 
   // 计算初始余额（优先从 account 获取配置的初始余额，备选从历史数据反推）
   const initialBalance =
@@ -141,15 +161,33 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
       : undefined) || // 备选：淨值 - 盈亏
     1000 // 默认值（与创建交易员时的默认配置一致）
 
+  // 数据跨度超过 24 小时时，时间标签带上日期，避免无法分辨天数
+  const timeSpanMs =
+    displayHistory.length > 1
+      ? new Date(
+          displayHistory[displayHistory.length - 1].timestamp
+        ).getTime() - new Date(displayHistory[0].timestamp).getTime()
+      : 0
+  const showDate = timeSpanMs > 24 * 60 * 60 * 1000
+  const locale = language === 'zh' ? 'zh-CN' : 'en-US'
+  const formatAxisTime = (ts: string) => {
+    const d = new Date(ts)
+    const hm = d.toLocaleTimeString(locale, {
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    })
+    return showDate
+      ? `${d.toLocaleDateString(locale, { month: '2-digit', day: '2-digit' })} ${hm}`
+      : hm
+  }
+
   // 转换数据格式
   const chartData = displayHistory.map((point) => {
     const pnl = point.total_equity - initialBalance
     const pnlPct = ((pnl / initialBalance) * 100).toFixed(2)
     return {
-      time: new Date(point.timestamp).toLocaleTimeString('zh-CN', {
-        hour: '2-digit',
-        minute: '2-digit',
-      }),
+      time: formatAxisTime(point.timestamp),
       value: displayMode === 'dollar' ? point.total_equity : parseFloat(pnlPct),
       cycle: point.cycle_number,
       raw_equity: point.total_equity,
@@ -157,6 +195,20 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
       raw_pnl_pct: parseFloat(pnlPct),
     }
   })
+
+  // 最大回撤：历史峰值到后续最低点的最大跌幅
+  const maxDrawdownPct = (() => {
+    let peak = -Infinity
+    let maxDD = 0
+    for (const p of validHistory) {
+      if (p.total_equity > peak) peak = p.total_equity
+      if (peak > 0) {
+        const dd = ((peak - p.total_equity) / peak) * 100
+        if (dd > maxDD) maxDD = dd
+      }
+    }
+    return maxDD
+  })()
 
   const currentValue = chartData[chartData.length - 1]
   const isProfit = currentValue.raw_pnl >= 0
@@ -212,7 +264,11 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
   }
 
   return (
-    <div className={embedded ? 'p-3 sm:p-5' : 'binance-card p-3 sm:p-5 animate-fade-in'}>
+    <div
+      className={
+        embedded ? 'p-3 sm:p-5' : 'binance-card p-3 sm:p-5 animate-fade-in'
+      }
+    >
       {/* Header */}
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between mb-4">
         <div className="flex-1">
@@ -380,7 +436,7 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
               }}
             />
             <Line
-              type="natural"
+              type="monotone"
               dataKey="value"
               stroke="url(#colorGradient)"
               strokeWidth={3}
@@ -399,7 +455,7 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
 
       {/* Footer Stats */}
       <div
-        className="mt-3 grid grid-cols-2 sm:grid-cols-4 gap-2 sm:gap-3 pt-3"
+        className="mt-3 grid grid-cols-2 sm:grid-cols-5 gap-2 sm:gap-3 pt-3"
         style={{ borderTop: '1px solid #2B3139' }}
       >
         <div
@@ -451,6 +507,23 @@ export function EquityChart({ traderId, embedded = false }: EquityChartProps) {
             style={{ color: '#EAECEF' }}
           >
             {validHistory.length} {t('cycles', language)}
+          </div>
+        </div>
+        <div
+          className="p-2 rounded transition-all hover:bg-opacity-50"
+          style={{ background: 'rgba(240, 185, 11, 0.05)' }}
+        >
+          <div
+            className="text-xs mb-1 uppercase tracking-wider"
+            style={{ color: '#848E9C' }}
+          >
+            {t('maxDrawdown', language)}
+          </div>
+          <div
+            className="text-xs sm:text-sm font-bold mono"
+            style={{ color: maxDrawdownPct > 0 ? '#F6465D' : '#0ECB81' }}
+          >
+            -{maxDrawdownPct.toFixed(2)}%
           </div>
         </div>
         <div

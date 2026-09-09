@@ -718,10 +718,6 @@ export default function HeaderBar({
           {isLoggedIn ? (
             <button
               onClick={() => {
-                console.log(
-                  '移动端 实时 button clicked, onPageChange:',
-                  onPageChange
-                )
                 onPageChange?.('competition')
                 setMobileMenuOpen(false)
               }}

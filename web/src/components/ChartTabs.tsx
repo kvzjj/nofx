@@ -28,12 +28,6 @@ export function ChartTabs({
   // 当从外部选择币种时，自动切换到K线图
   useEffect(() => {
     if (selectedSymbol) {
-      console.log(
-        '[ChartTabs] 收到币种选择:',
-        selectedSymbol,
-        'updateKey:',
-        updateKey
-      )
       setChartSymbol(selectedSymbol)
       setActiveTab('kline')
     }

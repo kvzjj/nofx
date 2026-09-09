@@ -52,6 +52,69 @@ export const translations = {
     short: 'SHORT',
     noPositions: 'No Positions',
     noActivePositions: 'No active trading positions',
+    actionCol: 'Action',
+    entryShort: 'Entry',
+    markShort: 'Mark',
+    qtyShort: 'Qty',
+    valueShort: 'Value',
+    levShort: 'Lev.',
+    upnlShort: 'uPnL',
+    liqShort: 'Liq.',
+    closeBtn: 'Close',
+    closePositionTitle: 'Close Position',
+    confirmCloseTitle: 'Confirm Close',
+    confirmBtn: 'Confirm',
+    cancelBtn: 'Cancel',
+    closeSuccess: 'Position closed successfully',
+    closeFailed: 'Failed to close position',
+    confirmClosePosition:
+      'Are you sure you want to close {symbol} {side} position?',
+    longPosition: 'LONG',
+    shortPosition: 'SHORT',
+    liveExposure: 'Live exposure',
+
+    // Risk controls
+    closeAll: 'Close All',
+    confirmCloseAll:
+      'Are you sure you want to close ALL {count} positions? This cannot be undone.',
+    closeAllSuccess: 'All positions closed',
+    closeAllPartial: '{success}/{total} positions closed, {failed} failed',
+    distanceToLiq: 'To Liq.',
+    liqWarningTitle: 'Liquidation risk',
+    stopTrading: 'Stop Trading',
+    confirmStopTrading: 'Stop auto trading for this trader?',
+    traderStopped: 'Trading stopped',
+    stopTradingFailed: 'Failed to stop trading',
+
+    // Trading statistics
+    tradingStats: 'Trading Stats',
+    cycleSuccessRate: 'Cycle Success Rate',
+    totalCyclesLabel: 'Total Cycles',
+    openTradesTotal: 'Positions Opened',
+    closeTradesTotal: 'Positions Closed',
+    maxDrawdown: 'Max Drawdown',
+    noStatsData: 'No statistics yet',
+
+    // Browser notifications
+    enableNotifications: 'Enable notifications',
+    notificationsEnabled: 'Notifications on',
+    notificationDenied: 'Notification permission was denied by the browser',
+    notifPositionOpened: '{trader} opened {side} {symbol}',
+    notifPositionClosed: '{trader} closed {side} {symbol}',
+    notifLiqRisk: '{symbol} is only {pct}% away from liquidation',
+    notifDecisionError: '{trader} decision cycle failed',
+
+    // Connection status
+    connectionLost: 'Connection lost — showing data from {time}',
+    dataStale: 'Data may be outdated — last update {time}',
+    liveLabel: 'Live',
+
+    // Dashboard hero
+    autoTradingActive: 'Auto trading active',
+    traderOverview: 'Trader overview',
+    cyclesCount: '{count} cycles',
+    updatedAt: 'Updated {time}',
+    noStrategy: 'No Strategy',
 
     // Recent Decisions
     recentDecisions: 'Recent Decisions',
@@ -95,7 +158,8 @@ export const translations = {
     // Backtest Page
     backtestPage: {
       title: 'Backtest Lab',
-      subtitle: 'Pick a model + time range to replay the full AI decision loop.',
+      subtitle:
+        'Pick a model + time range to replay the full AI decision loop.',
       start: 'Start Backtest',
       starting: 'Starting...',
       quickRanges: {
@@ -133,13 +197,13 @@ export const translations = {
         customTfPlaceholder: 'Custom TFs (comma separated, e.g. 2h,6h)',
         initialBalanceLabel: 'Initial balance (USDT)',
         feeLabel: 'Fee (bps)',
-      slippageLabel: 'Slippage (bps)',
-      btcEthLeverageLabel: 'BTC/ETH leverage (x)',
-      altcoinLeverageLabel: 'Altcoin leverage (x)',
-      fillPolicies: {
-        nextOpen: 'Next open',
-        barVwap: 'Bar VWAP',
-        midPrice: 'Mid price',
+        slippageLabel: 'Slippage (bps)',
+        btcEthLeverageLabel: 'BTC/ETH leverage (x)',
+        altcoinLeverageLabel: 'Altcoin leverage (x)',
+        fillPolicies: {
+          nextOpen: 'Next open',
+          barVwap: 'Bar VWAP',
+          midPrice: 'Mid price',
         },
         promptPresets: {
           baseline: 'Baseline',
@@ -214,7 +278,8 @@ export const translations = {
         title: 'AI Decision Trail',
         subtitle: 'Showing last {count} cycles',
         empty: 'No records yet',
-        emptyHint: 'The AI thought & execution log will appear once the run starts.',
+        emptyHint:
+          'The AI thought & execution log will appear once the run starts.',
       },
       charts: {
         equityTitle: 'Equity Curve',
@@ -377,13 +442,20 @@ export const translations = {
     lighterApiKeyPrivateKey: 'API Key Private Key',
     enterLighterWalletAddress: 'Enter Ethereum wallet address (0x...)',
     enterLighterPrivateKey: 'Enter L1 private key (32 bytes)',
-    enterLighterApiKeyPrivateKey: 'Enter API Key private key (40 bytes, optional)',
-    lighterWalletAddressDesc: 'Your Ethereum wallet address for account identification',
-    lighterPrivateKeyDesc: 'L1 private key for account identification (32-byte ECDSA key)',
-    lighterApiKeyPrivateKeyDesc: 'API Key private key for transaction signing (40-byte Poseidon2 key)',
-    lighterApiKeyOptionalNote: 'Without API Key, system will use limited V1 mode',
-    lighterV1Description: 'Basic Mode - Limited functionality, testing framework only',
-    lighterV2Description: 'Full Mode - Supports Poseidon2 signing and real trading',
+    enterLighterApiKeyPrivateKey:
+      'Enter API Key private key (40 bytes, optional)',
+    lighterWalletAddressDesc:
+      'Your Ethereum wallet address for account identification',
+    lighterPrivateKeyDesc:
+      'L1 private key for account identification (32-byte ECDSA key)',
+    lighterApiKeyPrivateKeyDesc:
+      'API Key private key for transaction signing (40-byte Poseidon2 key)',
+    lighterApiKeyOptionalNote:
+      'Without API Key, system will use limited V1 mode',
+    lighterV1Description:
+      'Basic Mode - Limited functionality, testing framework only',
+    lighterV2Description:
+      'Full Mode - Supports Poseidon2 signing and real trading',
     lighterPrivateKeyImported: 'LIGHTER private key imported',
 
     // Exchange names
@@ -519,12 +591,13 @@ export const translations = {
     leaveBlankForDefault: 'Leave blank to use default API address',
     modelConfigInfo1:
       '• For official API, only API Key is required, leave other fields blank',
-    modelConfigInfo2: '• Custom Base URL and Model Name only needed for third-party proxies',
-    modelConfigInfo3:
-      '• API Key is encrypted and stored securely',
+    modelConfigInfo2:
+      '• Custom Base URL and Model Name only needed for third-party proxies',
+    modelConfigInfo3: '• API Key is encrypted and stored securely',
     defaultModel: 'Default model',
     applyApiKey: 'Apply API Key',
-    kimiApiNote: 'Kimi requires API Key from international site (moonshot.ai), China region keys are not compatible',
+    kimiApiNote:
+      'Kimi requires API Key from international site (moonshot.ai), China region keys are not compatible',
     leaveBlankForDefaultModel: 'Leave blank to use default model',
     customModelName: 'Model Name (Optional)',
     customModelNamePlaceholder: 'e.g.: deepseek-chat, qwen3-max, gpt-4o',
@@ -1017,7 +1090,6 @@ export const translations = {
         'Invalid private key format (should be 64 hex characters)',
       privatekeyObfuscationFailed: 'Clipboard obfuscation failed',
     },
-
   },
   zh: {
     // Header
@@ -1070,8 +1142,69 @@ export const translations = {
     short: '空头',
     noPositions: '无持仓',
     noActivePositions: '当前没有活跃的交易持仓',
+    actionCol: '操作',
+    entryShort: '入场价',
+    markShort: '标记价',
+    qtyShort: '数量',
+    valueShort: '价值',
+    levShort: '杠杆',
+    upnlShort: '未实现盈亏',
+    liqShort: '强平价',
+    closeBtn: '平仓',
+    closePositionTitle: '平仓',
+    confirmCloseTitle: '确认平仓',
+    confirmBtn: '确认',
+    cancelBtn: '取消',
+    closeSuccess: '平仓成功',
+    closeFailed: '平仓失败',
+    confirmClosePosition: '确定要平仓 {symbol} {side}吗？',
+    longPosition: '多仓',
+    shortPosition: '空仓',
+    liveExposure: '实时敞口',
 
-    // Recent Decisions
+    // 风控操作
+    closeAll: '一键全平',
+    confirmCloseAll: '确定要平掉全部 {count} 个持仓吗？此操作不可撤销。',
+    closeAllSuccess: '已全部平仓',
+    closeAllPartial: '{success}/{total} 个持仓已平仓，{failed} 个失败',
+    distanceToLiq: '距强平',
+    liqWarningTitle: '强平风险',
+    stopTrading: '停止交易',
+    confirmStopTrading: '确定停止该交易员的自动交易吗？',
+    traderStopped: '已停止交易',
+    stopTradingFailed: '停止交易失败',
+
+    // 交易统计
+    tradingStats: '交易统计',
+    cycleSuccessRate: '周期成功率',
+    totalCyclesLabel: '总周期数',
+    openTradesTotal: '累计开仓',
+    closeTradesTotal: '累计平仓',
+    maxDrawdown: '最大回撤',
+    noStatsData: '暂无统计数据',
+
+    // 浏览器通知
+    enableNotifications: '开启通知',
+    notificationsEnabled: '通知已开启',
+    notificationDenied: '浏览器已拒绝通知权限',
+    notifPositionOpened: '{trader} 开仓 {side} {symbol}',
+    notifPositionClosed: '{trader} 已平仓 {side} {symbol}',
+    notifLiqRisk: '{symbol} 距强平价仅 {pct}%',
+    notifDecisionError: '{trader} 决策周期执行失败',
+
+    // 连接状态
+    connectionLost: '连接已断开 — 显示的是 {time} 的数据',
+    dataStale: '数据可能已过期 — 最后更新 {time}',
+    liveLabel: '实时',
+
+    // 仪表盘头部
+    autoTradingActive: '自动交易运行中',
+    traderOverview: '交易员概览',
+    cyclesCount: '{count} 次循环',
+    updatedAt: '更新于 {time}',
+    noStrategy: '无策略',
+
+    // 最近决策
     recentDecisions: '最近决策',
     lastCycles: '最近 {count} 个交易周期',
     noDecisionsYet: '暂无决策',
@@ -1150,13 +1283,13 @@ export const translations = {
         customTfPlaceholder: '自定义周期（逗号分隔，例如 2h,6h）',
         initialBalanceLabel: '初始资金 (USDT)',
         feeLabel: '手续费 (bps)',
-      slippageLabel: '滑点 (bps)',
-      btcEthLeverageLabel: 'BTC/ETH 杠杆 (倍)',
-      altcoinLeverageLabel: '山寨币杠杆 (倍)',
-      fillPolicies: {
-        nextOpen: '下一根开盘价',
-        barVwap: 'K线 VWAP',
-        midPrice: '中间价',
+        slippageLabel: '滑点 (bps)',
+        btcEthLeverageLabel: 'BTC/ETH 杠杆 (倍)',
+        altcoinLeverageLabel: '山寨币杠杆 (倍)',
+        fillPolicies: {
+          nextOpen: '下一根开盘价',
+          barVwap: 'K线 VWAP',
+          midPrice: '中间价',
         },
         promptPresets: {
           baseline: '基础版',
@@ -1392,8 +1525,10 @@ export const translations = {
     enterLighterApiKeyPrivateKey: '請輸入 API Key 私鑰（40 字節，可選）',
     lighterWalletAddressDesc: '您的以太坊錢包地址，用於識別賬戶',
     lighterPrivateKeyDesc: 'L1 私鑰用於賬戶識別（32 字節 ECDSA 私鑰）',
-    lighterApiKeyPrivateKeyDesc: 'API Key 私鑰用於簽名交易（40 字節 Poseidon2 私鑰）',
-    lighterApiKeyOptionalNote: '如果不提供 API Key，系統將使用功能受限的 V1 模式',
+    lighterApiKeyPrivateKeyDesc:
+      'API Key 私鑰用於簽名交易（40 字節 Poseidon2 私鑰）',
+    lighterApiKeyOptionalNote:
+      '如果不提供 API Key，系統將使用功能受限的 V1 模式',
     lighterV1Description: '基本模式 - 功能受限，僅用於測試框架',
     lighterV2Description: '完整模式 - 支持 Poseidon2 簽名和真實交易',
     lighterPrivateKeyImported: 'LIGHTER 私鑰已導入',
@@ -1514,11 +1649,13 @@ export const translations = {
     customBaseURLPlaceholder: '自定义API基础URL，如: https://api.openai.com/v1',
     leaveBlankForDefault: '留空则使用默认API地址',
     modelConfigInfo1: '• 使用官方 API 时，只需填写 API Key，其他字段留空即可',
-    modelConfigInfo2: '• 自定义 Base URL 和 Model Name 仅在使用第三方代理时需要填写',
+    modelConfigInfo2:
+      '• 自定义 Base URL 和 Model Name 仅在使用第三方代理时需要填写',
     modelConfigInfo3: '• API Key 加密存储，不会明文展示',
     defaultModel: '默认模型',
     applyApiKey: '申请 API Key',
-    kimiApiNote: 'Kimi 需要从国际站申请 API Key (moonshot.ai)，中国区 Key 不通用',
+    kimiApiNote:
+      'Kimi 需要从国际站申请 API Key (moonshot.ai)，中国区 Key 不通用',
     leaveBlankForDefaultModel: '留空使用默认模型名称',
     customModelName: 'Model Name (可选)',
     customModelNamePlaceholder: '例如: deepseek-chat, qwen3-max, gpt-4o',
@@ -1645,7 +1782,8 @@ export const translations = {
     signIn: '登录',
     signUp: '注册',
     registrationClosed: '注册已关闭',
-    registrationClosedMessage: '平台当前不开放新用户注册，如需访问请联系管理员获取账号。',
+    registrationClosedMessage:
+      '平台当前不开放新用户注册，如需访问请联系管理员获取账号。',
 
     // Hero Section
     githubStarsInDays: '3 天内 2.5K+ GitHub Stars',
@@ -1709,8 +1847,7 @@ export const translations = {
     step1Desc:
       'git clone https://github.com/tinkle-community/nofx 并切换到 dev 分支测试新功能。',
     step2Title: '配置环境',
-    step2Desc:
-      '前端设置交易所 API（Binance 和 OKX）、AI 模型和自定义提示词。',
+    step2Desc: '前端设置交易所 API（Binance 和 OKX）、AI 模型和自定义提示词。',
     step3Title: '部署与运行',
     step3Desc:
       '一键 Docker 部署，启动 AI 代理。注意：高风险市场，仅用闲钱测试。',
@@ -1975,7 +2112,6 @@ export const translations = {
       privatekeyInvalidFormat: '私钥格式无效（应为64位十六进制字符）',
       privatekeyObfuscationFailed: '剪贴板混淆失败',
     },
-
   },
 }
 

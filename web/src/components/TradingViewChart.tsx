@@ -3,10 +3,15 @@ import { useLanguage } from '../contexts/LanguageContext'
 import { t } from '../i18n/translations'
 import { ChevronDown, TrendingUp, X } from 'lucide-react'
 
-// 支持的交易所列表 (合约格式)
+// 支持的交易所列表 (TradingView 合约格式)
+// 保留与 NOFX 支持的交易所的对应关系；Hyperliquid/Aster 等 DEX
+// TradingView 暂无稳定合约代码，回退到 BINANCE
 const EXCHANGES = [
   { id: 'BINANCE', name: 'Binance', prefix: 'BINANCE:', suffix: '.P' },
-] as const
+  { id: 'BYBIT', name: 'Bybit', prefix: 'BYBIT:', suffix: '.P' },
+  { id: 'OKX', name: 'OKX', prefix: 'OKX:', suffix: '.P' },
+  { id: 'BITGET', name: 'Bitget', prefix: 'BITGET:', suffix: '.P' },
+]
 
 // 热门交易对
 const POPULAR_SYMBOLS = [
@@ -64,7 +69,6 @@ function TradingViewChartComponent({
   // 当外部传入的 defaultSymbol 变化时，更新内部 symbol
   useEffect(() => {
     if (defaultSymbol && defaultSymbol !== symbol) {
-      // console.log('[TradingViewChart] 更新币种:', defaultSymbol)
       setSymbol(defaultSymbol)
     }
   }, [defaultSymbol])
@@ -73,9 +77,11 @@ function TradingViewChartComponent({
   useEffect(() => {
     if (defaultExchange && defaultExchange !== exchange) {
       const normalizedExchange = defaultExchange.toUpperCase()
-      // console.log('[TradingViewChart] 更新交易所:', normalizedExchange)
-      if (EXCHANGES.some(e => e.id === normalizedExchange)) {
+      if (EXCHANGES.some((e) => e.id === normalizedExchange)) {
         setExchange(normalizedExchange)
+      } else {
+        // TradingView 上没有该交易所的合约代码（如 DEX），回退到 Binance
+        setExchange('BINANCE')
       }
     }
   }, [defaultExchange])
@@ -160,10 +166,9 @@ function TradingViewChartComponent({
 
   return (
     <div
-      className={`${embedded ? '' : 'binance-card'} overflow-hidden ${embedded ? '' : 'animate-fade-in'} ${isFullscreen
-          ? 'fixed inset-0 z-50 rounded-none flex flex-col'
-          : ''
-        }`}
+      className={`${embedded ? '' : 'binance-card'} overflow-hidden ${embedded ? '' : 'animate-fade-in'} ${
+        isFullscreen ? 'fixed inset-0 z-50 rounded-none flex flex-col' : ''
+      }`}
       style={isFullscreen ? { background: '#0B0E11' } : undefined}
     >
       {/* Header */}
@@ -184,7 +189,9 @@ function TradingViewChartComponent({
         )}
 
         {/* Controls */}
-        <div className={`flex flex-wrap items-center gap-2 ${embedded ? '' : 'ml-auto'}`}>
+        <div
+          className={`flex flex-wrap items-center gap-2 ${embedded ? '' : 'ml-auto'}`}
+        >
           {/* Exchange Selector */}
           <div className="relative">
             <button
@@ -261,13 +268,20 @@ function TradingViewChartComponent({
                 }}
               >
                 {/* Custom Input */}
-                <div className="px-3 pb-2" style={{ borderBottom: '1px solid #2B3139' }}>
+                <div
+                  className="px-3 pb-2"
+                  style={{ borderBottom: '1px solid #2B3139' }}
+                >
                   <div className="flex gap-2">
                     <input
                       type="text"
                       value={customSymbol}
-                      onChange={(e) => setCustomSymbol(e.target.value.toUpperCase())}
-                      onKeyDown={(e) => e.key === 'Enter' && handleCustomSymbolSubmit()}
+                      onChange={(e) =>
+                        setCustomSymbol(e.target.value.toUpperCase())
+                      }
+                      onKeyDown={(e) =>
+                        e.key === 'Enter' && handleCustomSymbolSubmit()
+                      }
                       placeholder={t('enterSymbol', language)}
                       className="flex-1 px-3 py-1.5 rounded text-sm"
                       style={{
@@ -334,7 +348,8 @@ function TradingViewChartComponent({
                 onClick={() => setTimeInterval(int.id)}
                 className="px-2 py-1 rounded text-xs font-medium transition-all"
                 style={{
-                  background: timeInterval === int.id ? '#F0B90B' : 'transparent',
+                  background:
+                    timeInterval === int.id ? '#F0B90B' : 'transparent',
                   color: timeInterval === int.id ? '#0B0E11' : '#848E9C',
                 }}
               >
@@ -352,12 +367,22 @@ function TradingViewChartComponent({
               color: isFullscreen ? '#0B0E11' : '#848E9C',
               border: '1px solid #2B3139',
             }}
-            title={isFullscreen ? t('exitFullscreen', language) : t('fullscreen', language)}
+            title={
+              isFullscreen
+                ? t('exitFullscreen', language)
+                : t('fullscreen', language)
+            }
           >
             {isFullscreen ? (
               <X className="w-4 h-4" />
             ) : (
-              <svg className="w-4 h-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+              <svg
+                className="w-4 h-4"
+                viewBox="0 0 24 24"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              >
                 <path d="M8 3H5a2 2 0 00-2 2v3m18 0V5a2 2 0 00-2-2h-3m0 18h3a2 2 0 002-2v-3M3 16v3a2 2 0 002 2h3" />
               </svg>
             )}

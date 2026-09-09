@@ -136,6 +136,10 @@ func (s *Server) setupRoutes() {
 			protected.POST("/traders/:id/close-position", s.handleClosePosition)
 			protected.PUT("/traders/:id/competition", s.handleToggleCompetition)
 
+			// SSE 实时推送（账户+持仓快照），EventSource 无法携带 Authorization 头，
+			// authMiddleware 会回退读取 token 查询参数
+			protected.GET("/traders/:id/stream", s.handleTraderStream)
+
 			// AI model configuration
 			protected.GET("/models", s.handleGetModelConfigs)
 			protected.PUT("/models", s.handleUpdateModelConfigs)
@@ -1969,6 +1973,15 @@ func (s *Server) handleEquityHistory(c *gin.Context) {
 func (s *Server) authMiddleware() gin.HandlerFunc {
 	return func(c *gin.Context) {
 		authHeader := c.GetHeader("Authorization")
+
+		// EventSource (SSE) 无法设置自定义请求头，回退读取 token 查询参数。
+		// JWT 校验流程与 Bearer 方式完全一致。
+		if authHeader == "" {
+			if queryToken := strings.TrimSpace(c.Query("token")); queryToken != "" {
+				authHeader = "Bearer " + queryToken
+			}
+		}
+
 		if authHeader == "" {
 			c.JSON(http.StatusUnauthorized, gin.H{"error": "Missing Authorization header"})
 			c.Abort()

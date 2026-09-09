@@ -1076,6 +1076,209 @@ tr:hover {
   }
 }
 
+/* —— 交易界面新增样式 —— */
+
+/* Hero 操作区：停止交易 / 通知开关 */
+.dashboard-hero__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: 0 0 auto;
+}
+
+/* 通知铃铛按钮 */
+.alerts-bell-btn {
+  border: 1px solid var(--panel-border);
+  color: var(--text-secondary);
+  background: #1a1f25;
+}
+.alerts-bell-btn:hover {
+  color: var(--text-primary);
+  border-color: rgba(252, 213, 53, 0.4);
+}
+.alerts-bell-btn.is-on {
+  border-color: rgba(14, 203, 129, 0.45);
+  color: #0ecb81;
+  background: rgba(14, 203, 129, 0.08);
+}
+
+/* SSE 实时连接徽章 */
+.dashboard-live-badge {
+  display: inline-flex;
+  align-items: center;
+  margin-left: 8px;
+  padding: 1px 7px;
+  border-radius: 999px;
+  border: 1px solid rgba(14, 203, 129, 0.4);
+  background: rgba(14, 203, 129, 0.1);
+  color: #0ecb81;
+  font-size: 0.6rem;
+  font-weight: 800;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+
+/* 连接状态横幅 */
+.dashboard-connection-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 14px;
+  padding: 10px 14px;
+  border-radius: 8px;
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+.dashboard-connection-banner.is-error {
+  border: 1px solid rgba(246, 70, 93, 0.45);
+  background: rgba(246, 70, 93, 0.12);
+  color: #f6465d;
+}
+.dashboard-connection-banner.is-stale {
+  border: 1px solid rgba(240, 185, 11, 0.45);
+  background: rgba(240, 185, 11, 0.1);
+  color: #f0b90b;
+}
+
+/* 交易统计条 */
+.dashboard-stats-strip {
+  display: grid;
+  grid-template-columns: 1.4fr 1fr 1fr 1fr;
+  gap: 12px;
+  margin-bottom: 16px;
+  padding: 12px 16px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: #13171c;
+}
+.stats-strip__item {
+  min-width: 0;
+}
+.stats-strip__label {
+  margin-bottom: 4px;
+  color: var(--text-tertiary);
+  font-size: 0.65rem;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.stats-strip__value {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--text-primary);
+  font-size: 1rem;
+  font-weight: 800;
+  font-variant-numeric: tabular-nums;
+}
+.stats-strip__value .is-positive {
+  color: #0ecb81;
+}
+.stats-strip__value .is-negative {
+  color: #f6465d;
+}
+.stats-strip__muted {
+  color: var(--text-tertiary);
+  font-size: 0.8rem;
+  font-weight: 600;
+}
+.stats-strip__bar {
+  position: relative;
+  flex: 1;
+  max-width: 110px;
+  height: 5px;
+  border-radius: 999px;
+  background: #22282f;
+  overflow: hidden;
+}
+.stats-strip__bar-fill {
+  position: absolute;
+  inset: 0 auto 0 0;
+  border-radius: 999px;
+}
+.stats-strip__bar-fill.is-positive {
+  background: #0ecb81;
+}
+.stats-strip__bar-fill.is-negative {
+  background: #f6465d;
+}
+
+/* 面板头部操作区（一键全平 + 计数徽章） */
+.dashboard-panel__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+/* 强平风险行高亮 */
+.pos-liq-risk {
+  background: rgba(246, 70, 93, 0.06);
+  box-shadow: inset 2px 0 0 #f6465d;
+}
+
+/* 移动端持仓卡片 */
+.positions-mobile {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.positions-mobile__card {
+  padding: 12px;
+  border: 1px solid var(--panel-border);
+  border-radius: 10px;
+  background: #14181d;
+}
+.positions-mobile__card.pos-liq-risk {
+  border-color: rgba(246, 70, 93, 0.5);
+}
+.positions-mobile__top {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 8px;
+}
+.positions-mobile__symbol {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.95rem;
+  font-weight: 800;
+  cursor: pointer;
+}
+.positions-mobile__side {
+  padding: 2px 7px;
+  border-radius: 4px;
+  font-size: 0.65rem;
+  font-weight: 800;
+}
+.positions-mobile__pnl {
+  margin-left: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.9rem;
+  font-weight: 800;
+}
+.positions-mobile__grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 4px 10px;
+  color: var(--text-secondary);
+  font-family: var(--font-mono, monospace);
+  font-size: 0.72rem;
+}
+.positions-mobile__footer {
+  display: flex;
+  justify-content: flex-end;
+  margin-top: 10px;
+}
+
+@media (max-width: 1180px) {
+  .dashboard-stats-strip {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 640px) {
   .dashboard-hero__main {
     align-items: stretch;
@@ -1114,6 +1317,13 @@ tr:hover {
   }
   .dashboard-chart__tab {
     flex: 1 0 auto;
+    justify-content: center;
+  }
+  .dashboard-hero__actions {
+    width: 100%;
+  }
+  .dashboard-hero__actions > button {
+    flex: 1;
     justify-content: center;
   }
 }

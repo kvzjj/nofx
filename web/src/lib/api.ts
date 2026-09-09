@@ -357,7 +357,6 @@ export const api = {
       : `${API_BASE}/account`
     const result = await httpClient.get<AccountInfo>(url)
     if (!result.success) throw new Error('获取账户信息失败')
-    console.log('Account data fetched:', result.data)
     return result.data!
   },
 
