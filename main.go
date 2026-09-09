@@ -12,6 +12,7 @@ import (
 	"nofx/mcp"
 	"nofx/metrics"
 	"nofx/notification"
+	"nofx/notify"
 	"nofx/store"
 	"nofx/trader"
 	"os"
@@ -93,6 +94,10 @@ func main() {
 	}
 	st.SetCryptoFuncs(encryptFunc, decryptFunc)
 	logger.Info("✅ Encryption service initialized successfully")
+
+	// Initialize notification service (Telegram / Webhook / Email)
+	notify.Init(st)
+	logger.Info("✅ Notification service initialized")
 
 	// Set JWT secret
 	auth.SetJWTSecret(cfg.JWTSecret)

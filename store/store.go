@@ -188,7 +188,7 @@ func (s *Store) initTables() error {
 	if err := s.Audit().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize audit tables: %w", err)
 	}
-	if err := s.Notification().initTables(); err != nil {
+	if err := s.Notification().InitTables(); err != nil {
 		return fmt.Errorf("failed to initialize notification tables: %w", err)
 	}
 	if err := s.TokenBlacklist().initTables(); err != nil {

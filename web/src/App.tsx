@@ -29,7 +29,14 @@ import {
   liquidationDistancePct,
   LIQ_RISK_THRESHOLD_PCT,
 } from './lib/format'
+import { exportCsv, exportJson, timestampSlug } from './lib/export'
 import { DecisionCard } from './components/DecisionCard'
+import { OrderHistoryPanel } from './components/OrderHistoryPanel'
+import { PerformanceMetricsPanel } from './components/PerformanceMetricsPanel'
+import { NotificationsPage } from './pages/NotificationsPage'
+import { SettingsPage } from './pages/SettingsPage'
+import { AdminPage } from './pages/AdminPage'
+import { ManualOrderModal } from './components/ManualOrderModal'
 import { PunkAvatar, getTraderAvatar } from './components/PunkAvatar'
 import { OFFICIAL_LINKS } from './constants/branding'
 import { BacktestPage } from './components/BacktestPage'
@@ -53,6 +60,8 @@ import {
   WalletCards,
   WifiOff,
   Zap,
+  Download,
+  Crosshair,
 } from 'lucide-react'
 import type {
   SystemStatus,
@@ -71,6 +80,9 @@ type Page =
   | 'backtest'
   | 'strategy'
   | 'faq'
+  | 'notifications'
+  | 'settings'
+  | 'admin'
   | 'login'
   | 'register'
 
@@ -127,6 +139,10 @@ function App() {
     if (path === '/traders' || hash === 'traders') return 'traders'
     if (path === '/backtest' || hash === 'backtest') return 'backtest'
     if (path === '/strategy' || hash === 'strategy') return 'strategy'
+    if (path === '/notifications' || hash === 'notifications')
+      return 'notifications'
+    if (path === '/settings' || hash === 'settings') return 'settings'
+    if (path === '/admin' || hash === 'admin') return 'admin'
     if (path === '/dashboard' || hash === 'trader' || hash === 'details')
       return 'trader'
     return 'competition' // 默认为竞赛页面
@@ -152,6 +168,12 @@ function App() {
         setCurrentPage('backtest')
       } else if (path === '/strategy' || hash === 'strategy') {
         setCurrentPage('strategy')
+      } else if (path === '/notifications' || hash === 'notifications') {
+        setCurrentPage('notifications')
+      } else if (path === '/settings' || hash === 'settings') {
+        setCurrentPage('settings')
+      } else if (path === '/admin' || hash === 'admin') {
+        setCurrentPage('admin')
       } else if (
         path === '/dashboard' ||
         hash === 'trader' ||
@@ -312,6 +334,10 @@ function App() {
       setCurrentPage('traders')
     } else if (route === '/dashboard') {
       setCurrentPage('trader')
+    } else if (route === '/notifications') {
+      setCurrentPage('notifications')
+    } else if (route === '/settings') {
+      setCurrentPage('settings')
     }
   }, [route])
 
@@ -384,6 +410,14 @@ function App() {
               window.history.pushState({}, '', '/strategy')
               setRoute('/strategy')
               setCurrentPage('strategy')
+            } else if (page === 'notifications') {
+              window.history.pushState({}, '', '/notifications')
+              setRoute('/notifications')
+              setCurrentPage('notifications')
+            } else if (page === 'settings') {
+              window.history.pushState({}, '', '/settings')
+              setRoute('/settings')
+              setCurrentPage('settings')
             }
           }}
         />
@@ -475,6 +509,18 @@ function App() {
           } else if (page === 'faq') {
             window.history.pushState({}, '', '/faq')
             setRoute('/faq')
+          } else if (page === 'notifications') {
+            window.history.pushState({}, '', '/notifications')
+            setRoute('/notifications')
+            setCurrentPage('notifications')
+          } else if (page === 'settings') {
+            window.history.pushState({}, '', '/settings')
+            setRoute('/settings')
+            setCurrentPage('settings')
+          } else if (page === 'admin') {
+            window.history.pushState({}, '', '/admin')
+            setRoute('/admin')
+            setCurrentPage('admin')
           }
         }}
       />
@@ -496,6 +542,12 @@ function App() {
           <BacktestPage />
         ) : currentPage === 'strategy' ? (
           <StrategyStudioPage />
+        ) : currentPage === 'notifications' ? (
+          <NotificationsPage />
+        ) : currentPage === 'settings' ? (
+          <SettingsPage />
+        ) : currentPage === 'admin' ? (
+          <AdminPage />
         ) : (
           <TraderDetailsPage
             selectedTrader={selectedTrader}
@@ -690,6 +742,7 @@ function TraderDetailsPage({
   const [closingPosition, setClosingPosition] = useState<string | null>(null)
   const [closingAll, setClosingAll] = useState(false)
   const [stoppingTrader, setStoppingTrader] = useState(false)
+  const [manualOrderOpen, setManualOrderOpen] = useState(false)
   const [selectedChartSymbol, setSelectedChartSymbol] = useState<
     string | undefined
   >(undefined)
@@ -806,6 +859,51 @@ function TraderDetailsPage({
     } finally {
       setStoppingTrader(false)
     }
+  }
+
+  // 导出当前持仓 CSV
+  const handleExportPositions = () => {
+    if (!positions || positions.length === 0) return
+    exportCsv(
+      `positions-${selectedTrader?.trader_name ?? 'trader'}-${timestampSlug()}.csv`,
+      [
+        'Symbol',
+        'Side',
+        'Entry Price',
+        'Mark Price',
+        'Quantity',
+        'Leverage',
+        'Unrealized PnL',
+        'Unrealized PnL %',
+        'Liquidation Price',
+      ],
+      positions.map((p) => [
+        p.symbol,
+        p.side,
+        p.entry_price,
+        p.mark_price,
+        p.quantity,
+        p.leverage,
+        p.unrealized_pnl,
+        p.unrealized_pnl_pct,
+        p.liquidation_price,
+      ])
+    )
+  }
+
+  // 导出决策日志 JSON（含思维链，便于离线分析）
+  const handleExportDecisions = () => {
+    if (!decisions || decisions.length === 0) return
+    exportJson(
+      `decisions-${selectedTrader?.trader_name ?? 'trader'}-${timestampSlug()}.json`,
+      {
+        trader: selectedTrader?.trader_name,
+        trader_id: selectedTraderId,
+        exported_at: new Date().toISOString(),
+        count: decisions.length,
+        decisions,
+      }
+    )
   }
 
   // 连接状态：接口报错 → 连接断开；数据超过 60s 未更新 → 数据过期
@@ -1030,6 +1128,21 @@ function TraderDetailsPage({
 
           {/* Risk & alert actions */}
           <div className="dashboard-hero__actions">
+            {/* 手动下单 */}
+            <button
+              type="button"
+              onClick={() => setManualOrderOpen(true)}
+              className="inline-flex items-center gap-1.5 px-3 py-2 rounded-lg text-xs font-bold transition-all hover:scale-105"
+              style={{
+                background: '#1E2329',
+                border: '1px solid #2B3139',
+                color: '#FCD535',
+              }}
+              title={t('manualOrder', language)}
+            >
+              <Crosshair className="w-4 h-4" />
+              {t('manualOrder', language)}
+            </button>
             {status?.is_running && (
               <button
                 type="button"
@@ -1107,6 +1220,13 @@ function TraderDetailsPage({
       </section>
 
       {/* 连接状态横幅：接口报错或数据过期时提醒，避免静默展示陈旧数据 */}
+      {manualOrderOpen && selectedTraderId && (
+        <ManualOrderModal
+          traderId={selectedTraderId}
+          language={language}
+          onClose={() => setManualOrderOpen(false)}
+        />
+      )}
       {(hasConnectionError || isDataStale) && (
         <div
           className={`dashboard-connection-banner ${hasConnectionError ? 'is-error' : 'is-stale'}`}
@@ -1249,6 +1369,21 @@ function TraderDetailsPage({
               </div>
               {positions && positions.length > 0 && (
                 <div className="dashboard-panel__actions">
+                  {/* 导出持仓 CSV */}
+                  <button
+                    type="button"
+                    onClick={handleExportPositions}
+                    className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all hover:scale-105"
+                    style={{
+                      background: '#1E2329',
+                      border: '1px solid #2B3139',
+                      color: '#EAECEF',
+                    }}
+                    title={t('exportPositions', language)}
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    {t('exportCsv', language)}
+                  </button>
                   {/* 一键全平（紧急风控） */}
                   <button
                     type="button"
@@ -1623,6 +1758,18 @@ function TraderDetailsPage({
               </div>
             )}
           </div>
+
+          {/* Performance Metrics & Order History */}
+          <PerformanceMetricsPanel
+            traderId={selectedTrader.trader_id}
+            language={language}
+          />
+
+          {/* Order & Fill History */}
+          <OrderHistoryPanel
+            traderId={selectedTrader.trader_id}
+            language={language}
+          />
         </div>
         {/* 左侧结束 */}
 
@@ -1646,6 +1793,22 @@ function TraderDetailsPage({
                 </div>
               )}
             </div>
+            {/* 导出决策日志 */}
+            <button
+              type="button"
+              onClick={handleExportDecisions}
+              disabled={!decisions || decisions.length === 0}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-[11px] font-bold transition-all hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed flex-shrink-0"
+              style={{
+                background: '#1E2329',
+                border: '1px solid #2B3139',
+                color: '#EAECEF',
+              }}
+              title={t('exportDecisions', language)}
+            >
+              <Download className="w-3.5 h-3.5" />
+              JSON
+            </button>
             {/* 数量选择器 */}
             <select
               value={decisionsLimit}

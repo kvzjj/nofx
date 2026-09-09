@@ -26,6 +26,15 @@ import type {
   NotificationSettings,
   AuditEvent,
   BackupRecord,
+  OrderHistoryResponse,
+  FillHistoryResponse,
+  PerformanceMetrics,
+  NotificationChannel,
+  NotificationLog,
+  UserProfile,
+  AdminUser,
+  AdminSystemStatus,
+  AdminDecisionFeedItem,
 } from '../types'
 import { CryptoService } from './crypto'
 import { httpClient } from './httpClient'
@@ -125,6 +134,25 @@ export const api = {
     return result.data!
   },
 
+  // 同步交易所余额到初始资金（真实交易所账户）
+  async syncBalance(traderId: string): Promise<{
+    message: string
+    old_balance: number
+    new_balance: number
+    change_percent: number
+    change_type: string
+  }> {
+    const result = await httpClient.post<{
+      message: string
+      old_balance: number
+      new_balance: number
+      change_percent: number
+      change_type: string
+    }>(`${API_BASE}/traders/${traderId}/sync-balance`)
+    if (!result.success) throw new Error('同步余额失败')
+    return result.data!
+  },
+
   async toggleCompetition(
     traderId: string,
     showInCompetition: boolean
@@ -146,6 +174,24 @@ export const api = {
       { symbol, side }
     )
     if (!result.success) throw new Error('平仓失败')
+    return result.data!
+  },
+
+  // 手动下单（与 AI 决策共用同一执行常风控/仓位计算/保护单链路）
+  async manualOrder(
+    traderId: string,
+    request: {
+      symbol: string
+      action: 'open_long' | 'open_short' | 'close_long' | 'close_short'
+      stop_loss_pct?: number
+      take_profit_pct?: number
+    }
+  ): Promise<{ message: string }> {
+    const result = await httpClient.post<{ message: string }>(
+      `${API_BASE}/traders/${traderId}/manual-order`,
+      request
+    )
+    if (!result.success) throw new Error('手动下单失败')
     return result.data!
   },
 
@@ -430,6 +476,169 @@ export const api = {
     const result = await httpClient.get<Statistics>(url)
     if (!result.success) throw new Error('获取统计信息失败')
     return result.data!
+  },
+
+  // 获取历史订单（支持分页）
+  async getOrderHistory(
+    traderId?: string,
+    limit: number = 50,
+    offset: number = 0
+  ): Promise<OrderHistoryResponse> {
+    const params = new URLSearchParams()
+    if (traderId) params.append('trader_id', traderId)
+    params.append('limit', limit.toString())
+    params.append('offset', offset.toString())
+    const result = await httpClient.get<OrderHistoryResponse>(
+      `${API_BASE}/orders?${params}`
+    )
+    if (!result.success) throw new Error('获取历史订单失败')
+    return result.data!
+  },
+
+  // 获取成交记录（支持分页）
+  async getFillHistory(
+    traderId?: string,
+    limit: number = 50,
+    offset: number = 0
+  ): Promise<FillHistoryResponse> {
+    const params = new URLSearchParams()
+    if (traderId) params.append('trader_id', traderId)
+    params.append('limit', limit.toString())
+    params.append('offset', offset.toString())
+    const result = await httpClient.get<FillHistoryResponse>(
+      `${API_BASE}/fills?${params}`
+    )
+    if (!result.success) throw new Error('获取成交记录失败')
+    return result.data!
+  },
+
+  // 获取绩效指标（最大回撤/胜率/盈亏比/按币种PnL）
+  async getPerformanceMetrics(traderId?: string): Promise<PerformanceMetrics> {
+    const url = traderId
+      ? `${API_BASE}/performance-metrics?trader_id=${traderId}`
+      : `${API_BASE}/performance-metrics`
+    const result = await httpClient.get<PerformanceMetrics>(url)
+    if (!result.success) throw new Error('获取绩效指标失败')
+    return result.data!
+  },
+
+  // ============ 通知渠道 ============
+  async getNotificationChannels(): Promise<NotificationChannel[]> {
+    const result = await httpClient.get<NotificationChannel[]>(
+      `${API_BASE}/notifications/channels`
+    )
+    if (!result.success) throw new Error('获取通知渠道失败')
+    return result.data ?? []
+  },
+
+  async createNotificationChannel(request: {
+    name: string
+    type: string
+    config: Record<string, string>
+    enabled: boolean
+  }): Promise<NotificationChannel> {
+    const result = await httpClient.post<NotificationChannel>(
+      `${API_BASE}/notifications/channels`,
+      request
+    )
+    if (!result.success) throw new Error('创建通知渠道失败')
+    return result.data!
+  },
+
+  async updateNotificationChannel(
+    id: string,
+    request: {
+      name: string
+      type: string
+      config: Record<string, string>
+      enabled: boolean
+    }
+  ): Promise<NotificationChannel> {
+    const result = await httpClient.put<NotificationChannel>(
+      `${API_BASE}/notifications/channels/${id}`,
+      request
+    )
+    if (!result.success) throw new Error('更新通知渠道失败')
+    return result.data!
+  },
+
+  async deleteNotificationChannel(id: string): Promise<void> {
+    const result = await httpClient.delete(
+      `${API_BASE}/notifications/channels/${id}`
+    )
+    if (!result.success) throw new Error('删除通知渠道失败')
+  },
+
+  async testNotificationChannel(id: string): Promise<void> {
+    const result = await httpClient.post(
+      `${API_BASE}/notifications/channels/${id}/test`
+    )
+    if (!result.success) throw new Error('发送测试通知失败')
+  },
+
+  async getNotificationLogs(): Promise<NotificationLog[]> {
+    const result = await httpClient.get<NotificationLog[]>(
+      `${API_BASE}/notifications/logs`
+    )
+    if (!result.success) throw new Error('获取发送日志失败')
+    return result.data ?? []
+  },
+
+  // ============ 用户设置 ============
+  async getUserProfile(): Promise<UserProfile> {
+    const result = await httpClient.get<UserProfile>(`${API_BASE}/user/profile`)
+    if (!result.success) throw new Error('获取用户信息失败')
+    return result.data!
+  },
+
+  async changePassword(
+    oldPassword: string,
+    newPassword: string
+  ): Promise<void> {
+    const result = await httpClient.put(`${API_BASE}/user/password`, {
+      old_password: oldPassword,
+      new_password: newPassword,
+    })
+    if (!result.success) throw new Error('修改密码失败')
+  },
+
+  async reset2FA(): Promise<{ secret: string; qr_code_url: string }> {
+    const result = await httpClient.post<{
+      secret: string
+      qr_code_url: string
+    }>(`${API_BASE}/user/2fa/reset`)
+    if (!result.success) throw new Error('重置 2FA 失败')
+    return result.data!
+  },
+
+  async confirm2FA(code: string): Promise<void> {
+    const result = await httpClient.post(`${API_BASE}/user/2fa/confirm`, {
+      code,
+    })
+    if (!result.success) throw new Error('验证失败')
+  },
+
+  // ============ 管理后台 ============
+  async getAdminUsers(): Promise<AdminUser[]> {
+    const result = await httpClient.get<AdminUser[]>(`${API_BASE}/admin/users`)
+    if (!result.success) throw new Error('获取用户列表失败')
+    return result.data ?? []
+  },
+
+  async getAdminSystemStatus(): Promise<AdminSystemStatus> {
+    const result = await httpClient.get<AdminSystemStatus>(
+      `${API_BASE}/admin/system-status`
+    )
+    if (!result.success) throw new Error('获取系统状态失败')
+    return result.data!
+  },
+
+  async getAdminRecentDecisions(): Promise<AdminDecisionFeedItem[]> {
+    const result = await httpClient.get<AdminDecisionFeedItem[]>(
+      `${API_BASE}/admin/recent-decisions`
+    )
+    if (!result.success) throw new Error('获取决策动态失败')
+    return result.data ?? []
   },
 
   // 获取收益率历史数据（支持trader_id）

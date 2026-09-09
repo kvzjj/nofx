@@ -84,6 +84,157 @@ export interface Statistics {
   total_close_positions: number
 }
 
+// 历史订单（后端 store.TradeOrder + 时间戳）
+export interface TradeOrderRecord {
+  trader_id: string
+  exchange_id: string
+  exchange_type: string
+  order_id: string
+  symbol: string
+  position_side: string
+  action: string
+  requested_qty: number
+  executed_qty: number
+  avg_price: number
+  fee: number
+  status: string
+  last_error: string
+  leverage: number
+  stop_loss: number
+  take_profit: number
+  protected_qty: number
+  protection_status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface OrderHistoryResponse {
+  orders: TradeOrderRecord[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// 成交记录（后端 store.ExchangeFill）
+export interface ExchangeFillRecord {
+  trade_id: string
+  order_id: string
+  symbol: string
+  position_side: string
+  side: string
+  quantity: number
+  price: number
+  fee: number
+  realized_pnl: number
+  executed_at: string
+}
+
+export interface FillHistoryResponse {
+  fills: ExchangeFillRecord[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// 绩效指标（后端 /performance-metrics）
+export interface SymbolPnL {
+  symbol: string
+  realized_pnl: number
+  fee: number
+  closed_trades: number
+}
+
+export interface ExecutionStats {
+  closed_trades: number
+  winning_trades: number
+  losing_trades: number
+  win_rate: number
+  total_realized_pnl: number
+  total_fee: number
+  gross_profit: number
+  gross_loss: number
+  profit_factor: number
+  avg_win: number
+  avg_loss: number
+  pnl_by_symbol: SymbolPnL[]
+}
+
+export interface DrawdownStats {
+  max_drawdown_abs: number
+  max_drawdown_pct: number
+  peak_equity: number
+  trough_equity: number
+}
+
+export interface PerformanceMetrics {
+  execution: ExecutionStats
+  drawdown: DrawdownStats
+}
+
+// 通知渠道与发送日志（后端 /notifications/*）
+export interface NotificationChannel {
+  id: string
+  name: string
+  type: 'telegram' | 'webhook' | 'email'
+  enabled: boolean
+  config: Record<string, string>
+  created_at: string
+  updated_at: string
+}
+
+export interface NotificationLog {
+  id: number
+  channel_id: string
+  channel_name: string
+  channel_type: string
+  event: string
+  title: string
+  message: string
+  success: boolean
+  error?: string
+  created_at: string
+}
+
+// 用户资料（后端 /user/profile）
+export interface UserProfile {
+  user_id: string
+  email: string
+  otp_verified: boolean
+  created_at: string
+}
+
+// 管理后台（后端 /admin/*）
+export interface AdminUser {
+  user_id: string
+  email: string
+  otp_verified: boolean
+  created_at: string
+  trader_count: number
+  running_count: number
+}
+
+export interface AdminSystemStatus {
+  users_total: number
+  users_verified: number
+  traders_total: number
+  traders_running: number
+  goroutines: number
+  heap_alloc_mb: number
+  sys_mem_mb: number
+  db_size_mb: number
+  cpu_count: number
+  go_version: string
+  server_time: string
+}
+
+export interface AdminDecisionFeedItem {
+  trader_id: string
+  success: boolean
+  error?: string
+  timestamp: string
+  cycle_number: number
+}
+
 // AI Trading相关类型
 export interface TraderInfo {
   trader_id: string
