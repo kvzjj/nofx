@@ -2339,7 +2339,28 @@ func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]inter
 	go func() {
 		defer at.monitorWg.Done()
 		logger.Infof("  ⏳ Monitoring pending limit order %s for %s %s", orderID, symbol, action)
-		ticker := time.NewTicker(at.config.PendingOrderPollInterval)
+
+		// Real-time order updates replace high-frequency polling whenever the
+		// exchange supports a user-data stream; the poller degrades to a slow
+		// safety net that repairs any event the websocket may have missed.
+		pollInterval := at.config.PendingOrderPollInterval
+		var events <-chan OrderUpdateEvent
+		if streamer, ok := at.trader.(OrderUpdateStreamer); ok {
+			if ch, unsubscribe := streamer.SubscribeOrderUpdates(); ch != nil {
+				events = ch
+				defer unsubscribe()
+				fallback := pollInterval * 10
+				if fallback < 15*time.Second {
+					fallback = 15 * time.Second
+				}
+				if fallback > 60*time.Second {
+					fallback = 60 * time.Second
+				}
+				pollInterval = fallback
+				logger.Infof("  📡 Real-time order updates enabled for %s (fallback poll every %s)", orderID, fallback)
+			}
+		}
+		ticker := time.NewTicker(pollInterval)
 		defer ticker.Stop()
 		timeout := time.NewTimer(at.config.PendingOrderTimeout)
 		defer timeout.Stop()
@@ -2389,6 +2410,36 @@ func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]inter
 			}
 			return processFill(state, partialQty, partialPrice, partialFee)
 		}
+		// handleObservation processes one order-state observation (real-time
+		// event or poll) and reports whether monitoring should stop.
+		handleObservation := func(source string, state OrderState, executedQty, avgPrice, fee float64) bool {
+			if executedQty > partialQty {
+				partialQty, partialPrice, partialFee = executedQty, avgPrice, fee
+			}
+			protectionState := "UNPROTECTED"
+			if executedQty > 0 && executedQty <= protectedQty+1e-9 {
+				protectionState = "PROTECTED"
+			}
+			at.persistEntryOrderState(orderID, symbol, action, quantity, executedQty, avgPrice, fee, state, leverage, stopLoss, takeProfit, protectedQty, protectionState, nil)
+			if executedQty > protectedQty+1e-9 && !processFill(state, executedQty, avgPrice, fee) {
+				return true
+			}
+			switch state {
+			case OrderStateFilled:
+				if avgPrice <= 0 || executedQty <= 0 {
+					logger.Errorf("[%s] pending order %s reported FILLED without valid fill data (%s)", at.name, orderID, source)
+					return true
+				}
+				logger.Infof("  ✅ Pending limit order filled and protected: %s %s order=%s", symbol, positionSide, orderID)
+				return true
+			case OrderStatePartial:
+				logger.Warnf("  Partial fill detected for pending order %s (%s): executedQty=%.8f", orderID, source, executedQty)
+			case OrderStateCanceled, OrderStateRejected:
+				logger.Infof("  ⚠️ Pending limit order %s ended with status %s (%s)", orderID, state, source)
+				return true
+			}
+			return false
+		}
 		for {
 			select {
 			case <-stopCh:
@@ -2399,17 +2450,40 @@ func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]inter
 				return
 			case <-timeout.C:
 				if finalizePending("timed-out") {
-					logger.Infof("  ⏰ Pending limit order %s reached a terminal exchange state after 30 minutes", orderID)
+					logger.Infof("  ⏰ Pending limit order %s reached a terminal exchange state", orderID)
 					return
 				}
 				timeout.Reset(15 * time.Second)
+			case ev := <-events:
+				if ev.OrderID != orderID {
+					continue
+				}
+				if ev.ExecutedQty <= 0 && ev.Status != OrderStateCanceled && ev.Status != OrderStateRejected {
+					continue // lifecycle noise (e.g. NEW) without fill information
+				}
+				// Terminal states are confirmed with one authoritative REST query:
+				// it repairs anything the stream may have missed and yields exact
+				// cumulative fee accounting.
+				if ev.Status == OrderStateFilled || ev.Status == OrderStateCanceled || ev.Status == OrderStateRejected {
+					status, confirmErr := at.trader.GetOrderStatus(symbol, orderID)
+					if confirmErr == nil {
+						if handleObservation("confirmed", normalizeOrderState(fmt.Sprint(status["status"])), numberValue(status["executedQty"]), numberValue(status["avgPrice"]), numberValue(status["commission"])) {
+							return
+						}
+						continue
+					}
+					logger.Infof("  ⚠️ Could not confirm terminal state of order %s via REST: %v", orderID, confirmErr)
+				}
+				if handleObservation("stream", ev.Status, ev.ExecutedQty, ev.AvgPrice, ev.Fee) {
+					return
+				}
 			case <-ticker.C:
 				status, err := at.trader.GetOrderStatus(symbol, orderID)
 				if err != nil {
 					// Back off progressively so a rate-limited or unreachable
 					// exchange is not hammered every poll tick.
 					consecutiveErrors++
-					backoff := time.Duration(consecutiveErrors) * at.config.PendingOrderPollInterval
+					backoff := time.Duration(consecutiveErrors) * pollInterval
 					if backoff > 30*time.Second {
 						backoff = 30 * time.Second
 					}
@@ -2423,34 +2497,7 @@ func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]inter
 				consecutiveErrors = 0
 
 				statusStr, _ := status["status"].(string)
-				state := normalizeOrderState(statusStr)
-				executedQty := numberValue(status["executedQty"])
-				avgPrice := numberValue(status["avgPrice"])
-				fee := numberValue(status["commission"])
-				if executedQty > partialQty {
-					partialQty, partialPrice, partialFee = executedQty, avgPrice, fee
-				}
-				protectionState := "UNPROTECTED"
-				if executedQty > 0 && executedQty <= protectedQty+1e-9 {
-					protectionState = "PROTECTED"
-				}
-				at.persistEntryOrderState(orderID, symbol, action, quantity, executedQty, avgPrice, fee, state, leverage, stopLoss, takeProfit, protectedQty, protectionState, nil)
-				if executedQty > protectedQty+1e-9 && !processFill(state, executedQty, avgPrice, fee) {
-					return
-				}
-				switch state {
-				case OrderStateFilled:
-					if avgPrice <= 0 || executedQty <= 0 {
-						logger.Errorf("[%s] pending order %s reported FILLED without valid fill data", at.name, orderID)
-						return
-					}
-
-					logger.Infof("  ✅ Pending limit order filled and protected: %s %s order=%s", symbol, positionSide, orderID)
-					return
-				case OrderStatePartial:
-					logger.Warnf("  Partial fill detected for pending order %s: executedQty=%.8f", orderID, numberValue(status["executedQty"]))
-				case OrderStateCanceled, OrderStateRejected:
-					logger.Infof("  ⚠️ Pending limit order %s ended with status %s", orderID, statusStr)
+				if handleObservation("poll", normalizeOrderState(statusStr), numberValue(status["executedQty"]), numberValue(status["avgPrice"]), numberValue(status["commission"])) {
 					return
 				}
 			}

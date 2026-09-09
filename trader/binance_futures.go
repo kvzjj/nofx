@@ -49,6 +49,10 @@ type FuturesTrader struct {
 	client  *futures.Client
 	testnet bool
 
+	// Real-time order updates (user-data stream), lazily started
+	userStreamOnce sync.Once
+	userStream     *futuresUserStream
+
 	// Balance cache
 	cachedBalance     map[string]interface{}
 	balanceCacheTime  time.Time
@@ -64,7 +68,17 @@ type FuturesTrader struct {
 	cacheDuration time.Duration
 }
 
-func (t *FuturesTrader) ProtectionCoversFutureFills() bool { return true }
+func (t *FuturesTrader) ProtectionCoversFutureFills() bool { return false }
+
+// SubscribeOrderUpdates exposes the account's real-time order lifecycle
+// events. The websocket is shared by all subscribers and shuts down when the
+// last one unsubscribes.
+func (t *FuturesTrader) SubscribeOrderUpdates() (<-chan OrderUpdateEvent, func()) {
+	t.userStreamOnce.Do(func() {
+		t.userStream = newFuturesUserStream(t.client)
+	})
+	return t.userStream.SubscribeOrderUpdates()
+}
 
 // NewFuturesTrader creates futures trader
 func NewFuturesTrader(apiKey, secretKey string, userId string) *FuturesTrader {
