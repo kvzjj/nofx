@@ -103,6 +103,16 @@ type RecentOrder struct {
 	HoldDuration string  `json:"hold_duration"` // Hold duration, e.g. "2h30m"
 }
 
+// RecentExecutionFailure describes an instruction that was issued in a
+// recent cycle but failed to execute. Feeding these back into the prompt
+// lets the AI correct itself instead of blindly repeating the same order.
+type RecentExecutionFailure struct {
+	Symbol    string    `json:"symbol"`    // Trading pair of the failed instruction
+	Action    string    `json:"action"`    // open_long / open_short / close_long / close_short
+	Error     string    `json:"error"`     // Truncated failure reason
+	Timestamp time.Time `json:"timestamp"` // When the failure occurred
+}
+
 // Context trading context (complete information passed to AI)
 type Context struct {
 	CurrentTime     string                             `json:"current_time"`
@@ -114,6 +124,7 @@ type Context struct {
 	PromptVariant   string                             `json:"prompt_variant,omitempty"`
 	TradingStats    *TradingStats                      `json:"trading_stats,omitempty"`
 	RecentOrders    []RecentOrder                      `json:"recent_orders,omitempty"`
+	RecentFailures  []RecentExecutionFailure           `json:"recent_failures,omitempty"`
 	MarketDataMap   map[string]*market.Data            `json:"-"`
 	MultiTFMarket   map[string]map[string]*market.Data `json:"-"`
 	OITopDataMap    map[string]*OITopData              `json:"-"`
@@ -767,6 +778,17 @@ func (e *StrategyEngine) BuildUserPrompt(ctx *Context) string {
 				order.EntryPrice, order.ExitPrice,
 				resultStr, order.RealizedPnL, order.PnLPct,
 				order.EntryTime, order.ExitTime, order.HoldDuration))
+		}
+		sb.WriteString("\n")
+	}
+
+	// Recently failed executions (placed early so the AI sees them before deciding)
+	if len(ctx.RecentFailures) > 0 {
+		sb.WriteString("## Recent Execution Failures (previous instructions were NOT executed)\n")
+		sb.WriteString("The following instructions from recent cycles failed. Do NOT repeat the same instruction unless market/account conditions have materially changed (e.g. the blocking position is now closed, balance is restored, or price moved away). Adjust your plan accordingly.\n")
+		for i, failure := range ctx.RecentFailures {
+			sb.WriteString(fmt.Sprintf("%d. %s %s failed: %s\n",
+				i+1, failure.Symbol, failure.Action, failure.Error))
 		}
 		sb.WriteString("\n")
 	}
