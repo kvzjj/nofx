@@ -491,6 +491,16 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 		}
 		status := "UNPROTECTED"
 		tolerance := pos.Quantity*1e-6 + 1e-9
+		// Quantity-scoped protections that over-cover a shrunken position
+		// would be rejected at trigger time (order quantity exceeds the
+		// remaining position). Rebalance them: cancel the over-covering leg and
+		// let the intent repair below re-place an exact-size order.
+		if !state.stopClose && state.stopQty > pos.Quantity+tolerance {
+			m.rebalanceOverCoverage(trader, pos, "STOP_LOSS", &state.stopQty)
+		}
+		if !state.takeClose && state.takeQty > pos.Quantity+tolerance {
+			m.rebalanceOverCoverage(trader, pos, "TAKE_PROFIT", &state.takeQty)
+		}
 		if state.stopQty+tolerance >= pos.Quantity && state.takeQty+tolerance >= pos.Quantity {
 			status = "PROTECTED"
 		}
@@ -577,6 +587,19 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 			}
 		}
 	}
+}
+
+func (m *PositionSyncManager) rebalanceOverCoverage(trader Trader, pos *store.TraderPosition, kind string, covered *float64) {
+	kindCanceler, ok := trader.(ProtectionOrderCanceler)
+	if !ok {
+		return
+	}
+	if err := kindCanceler.CancelProtectionOrders(pos.Symbol, pos.Side, kind); err != nil {
+		logger.Infof("⚠️  Failed to rebalance over-covering %s protections for %s %s: %v", kind, pos.Symbol, pos.Side, err)
+		return
+	}
+	logger.Infof("📊 Rebalanced over-covering %s protections for %s %s (%.8f > %.8f)", kind, pos.Symbol, pos.Side, *covered, pos.Quantity)
+	*covered = 0
 }
 
 func (m *PositionSyncManager) emergencyCloseUnprotected(traderID, exchangeID string, trader Trader, pos *store.TraderPosition, reason string) {

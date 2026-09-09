@@ -33,6 +33,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Configurable pending limit-entry monitoring (`pending_order_timeout_sec`, `pending_order_poll_sec`) with progressive backoff on polling errors, exposed in the strategy risk-control UI
+- Real-time order updates via the Binance user-data websocket: low-latency partial-fill protection with the REST poller degrading to a slow 15-60s safety net (large API-weight reduction)
+- Quantity-scoped stop-loss/take-profit orders replacing full-position close orders: slices enable partial take-profit and trailing-stop strategies; dust slices below the exchange minimum notional fall back to close-position orders automatically
+- Over-coverage rebalancing: quantity-scoped protections that exceed a shrunken position (rejection risk at trigger time) are canceled and re-placed at exact size by reconciliation
 
 ---
 

@@ -39,9 +39,19 @@ type PositionOrderCanceler interface {
 	CancelPositionOrders(symbol, positionSide string) error
 }
 
-// FutureFillProtection reports whether an installed close-position protection
-// automatically covers later fills on the same position (for example Binance
-// closePosition conditional orders).
+// ProtectionOrderCanceler is implemented by exchanges that can cancel
+// system-owned protective orders of one kind ("STOP_LOSS" or "TAKE_PROFIT")
+// for a single position side. It enables rebalancing quantity-scoped
+// protections (e.g. after a partial close shrinks the position, or when
+// moving a stop for a trailing-stop strategy).
+type ProtectionOrderCanceler interface {
+	CancelProtectionOrders(symbol, positionSide, kind string) error
+}
+
+// FutureFillProtection reports whether an installed protection automatically
+// covers later fills on the same position (for example close-position
+// conditional orders). Quantity-scoped protections return false: every fill
+// slice must be protected explicitly.
 type FutureFillProtection interface {
 	ProtectionCoversFutureFills() bool
 }
@@ -160,13 +170,15 @@ type Trader interface {
 	// GetMarketPrice Get market price
 	GetMarketPrice(symbol string) (float64, error)
 
-	// SetStopLoss Set stop-loss order.
-	// Note: implementations using close-position conditional orders (Binance)
-	// ignore quantity and protect the whole position; the parameter is kept
-	// for exchanges that place quantity-scoped protective orders.
+	// SetStopLoss Set a quantity-scoped stop-loss order. The quantity is
+	// honored so positions can be protected slice by slice (enabling partial
+	// take-profit and trailing-stop strategies); implementations may fall
+	// back to a close-position order when the slice is below the exchange
+	// minimum notional.
 	SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error
 
-	// SetTakeProfit Set take-profit order (same quantity semantics as SetStopLoss)
+	// SetTakeProfit Set a quantity-scoped take-profit order (same slice
+	// semantics as SetStopLoss)
 	SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error
 
 	// CancelStopLossOrders Cancel only stop-loss orders (BUG fix: don't delete take-profit when adjusting stop-loss)

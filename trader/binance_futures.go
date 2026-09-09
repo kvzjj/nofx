@@ -909,70 +909,97 @@ func (t *FuturesTrader) FormatStopPrice(symbol string, price float64) string {
 	return fmt.Sprintf("%.*f", precision, price)
 }
 
-// SetStopLoss sets stop-loss order
-func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
-	var side futures.SideType
-	var posSide futures.PositionSideType
-
+// protectionSides maps a position side to the closing order side used by
+// protective conditional orders (hedge mode: a closing order can only reduce
+// its own position side, so no reduce-only flag is required).
+func protectionSides(positionSide string) (futures.SideType, futures.PositionSideType) {
 	if positionSide == "LONG" {
-		side = futures.SideTypeSell
-		posSide = futures.PositionSideTypeLong
-	} else {
-		side = futures.SideTypeBuy
-		posSide = futures.PositionSideTypeShort
+		return futures.SideTypeSell, futures.PositionSideTypeLong
 	}
+	return futures.SideTypeBuy, futures.PositionSideTypeShort
+}
 
+// isBelowNotionalRejection reports whether the exchange rejected an order
+// because its notional value is below the exchange minimum (typical for tiny
+// partial-fill slices).
+func isBelowNotionalRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	return strings.Contains(strings.ToLower(err.Error()), "notional")
+}
+
+// placeScopedProtection submits one quantity-scoped conditional order. The
+// quantity is honored so partial take-profit, scaled exits and trailing stops
+// can close slices of a position. Dust slices below the exchange minimum
+// notional fall back to a close-position order instead of leaving the slice
+// naked.
+func (t *FuturesTrader) placeScopedProtection(orderType futures.OrderType, symbol string, side futures.SideType, posSide futures.PositionSideType, quantity, triggerPrice float64, label string) error {
+	qtyStr := ""
+	if formatted, err := t.FormatQuantity(symbol, quantity); err == nil {
+		if q, perr := strconv.ParseFloat(formatted, 64); perr == nil && q > 0 {
+			qtyStr = formatted
+		}
+	}
+	if qtyStr != "" {
+		_, err := t.client.NewCreateOrderService().
+			Symbol(symbol).
+			Side(side).
+			PositionSide(posSide).
+			Type(orderType).
+			Quantity(qtyStr).
+			StopPrice(t.FormatStopPrice(symbol, triggerPrice)).
+			WorkingType(futures.WorkingTypeMarkPrice).
+			PriceProtect(true).
+			NewClientOrderID(getBrOrderID()).
+			Do(context.Background())
+		if err == nil {
+			logger.Infof("  %s set: qty=%s trigger=%.4f", label, qtyStr, triggerPrice)
+			return nil
+		}
+		if !isBelowNotionalRejection(err) {
+			return fmt.Errorf("failed to set %s: %w", label, err)
+		}
+		logger.Infof("  %s slice %s below minimum notional; falling back to close-position order: %v", label, qtyStr, err)
+	}
+	return t.placeCloseProtection(orderType, symbol, side, posSide, triggerPrice, label)
+}
+
+// placeCloseProtection submits a close-position conditional order that acts
+// on the whole position for one side. It is the safety net used when a scoped
+// order cannot be expressed (dust quantity).
+func (t *FuturesTrader) placeCloseProtection(orderType futures.OrderType, symbol string, side futures.SideType, posSide futures.PositionSideType, triggerPrice float64, label string) error {
 	_, err := t.client.NewCreateOrderService().
 		Symbol(symbol).
 		Side(side).
 		PositionSide(posSide).
-		Type(futures.OrderTypeStopMarket).
-		StopPrice(t.FormatStopPrice(symbol, stopPrice)).
+		Type(orderType).
+		StopPrice(t.FormatStopPrice(symbol, triggerPrice)).
 		WorkingType(futures.WorkingTypeMarkPrice).
 		PriceProtect(true).
 		ClosePosition(true).
 		NewClientOrderID(getBrOrderID()).
 		Do(context.Background())
-
 	if err != nil {
-		return fmt.Errorf("failed to set stop-loss: %w", err)
+		return fmt.Errorf("failed to set %s: %w", label, err)
 	}
-
-	logger.Infof("  Stop-loss price set: %.4f", stopPrice)
+	logger.Infof("  %s set (close-position): trigger=%.4f", label, triggerPrice)
 	return nil
 }
 
-// SetTakeProfit sets take-profit order
+// SetStopLoss sets a quantity-scoped stop-loss order (STOP_MARKET). Partial
+// take-profit / trailing-stop strategies can slice positions; dust slices
+// below the exchange minimum notional fall back to a close-position order.
+func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
+	side, posSide := protectionSides(positionSide)
+	return t.placeScopedProtection(futures.OrderTypeStopMarket, symbol, side, posSide, quantity, stopPrice, "stop-loss")
+}
+
+// SetTakeProfit sets a quantity-scoped take-profit order (TAKE_PROFIT_MARKET)
+// with the same slice semantics as SetStopLoss.
 func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error {
-	var side futures.SideType
-	var posSide futures.PositionSideType
-
-	if positionSide == "LONG" {
-		side = futures.SideTypeSell
-		posSide = futures.PositionSideTypeLong
-	} else {
-		side = futures.SideTypeBuy
-		posSide = futures.PositionSideTypeShort
-	}
-
-	_, err := t.client.NewCreateOrderService().
-		Symbol(symbol).
-		Side(side).
-		PositionSide(posSide).
-		Type(futures.OrderTypeTakeProfitMarket).
-		StopPrice(t.FormatStopPrice(symbol, takeProfitPrice)).
-		WorkingType(futures.WorkingTypeMarkPrice).
-		PriceProtect(true).
-		ClosePosition(true).
-		NewClientOrderID(getBrOrderID()).
-		Do(context.Background())
-
-	if err != nil {
-		return fmt.Errorf("failed to set take-profit: %w", err)
-	}
-
-	logger.Infof("  Take-profit price set: %.4f", takeProfitPrice)
-	return nil
+	side, posSide := protectionSides(positionSide)
+	return t.placeScopedProtection(futures.OrderTypeTakeProfitMarket, symbol, side, posSide, quantity, takeProfitPrice, "take-profit")
 }
 
 // GetMinNotional gets minimum notional value (Binance requirement)
@@ -1321,4 +1348,43 @@ func (t *FuturesTrader) GetTradesForSymbol(symbol string, startTime time.Time, l
 	}
 
 	return trades, nil
+}
+
+// CancelProtectionOrders cancels system-owned protective orders of one kind
+// ("STOP_LOSS" or "TAKE_PROFIT") for a single hedge-mode position side. It is
+// used to rebalance quantity-scoped protections after the position shrinks:
+// an over-covering stop would be rejected at trigger time once the remaining
+// position is smaller than the order quantity.
+func (t *FuturesTrader) CancelProtectionOrders(symbol, positionSide, kind string) error {
+	kind = strings.ToUpper(kind)
+	if kind != "STOP_LOSS" && kind != "TAKE_PROFIT" {
+		return fmt.Errorf("unknown protection kind: %s", kind)
+	}
+	orders, err := t.client.NewListOpenOrdersService().Symbol(symbol).Do(context.Background())
+	if err != nil {
+		return fmt.Errorf("failed to get open orders: %w", err)
+	}
+
+	targetSide := futures.PositionSideType(strings.ToUpper(positionSide))
+	var cancelErrors []error
+	for _, order := range orders {
+		if order.PositionSide != targetSide {
+			continue
+		}
+		if !strings.HasPrefix(order.ClientOrderID, "x-KzrpZaP9") {
+			continue
+		}
+		isStop := order.Type == futures.OrderTypeStopMarket || order.Type == futures.OrderTypeStop
+		isTake := order.Type == futures.OrderTypeTakeProfitMarket || order.Type == futures.OrderTypeTakeProfit
+		if (kind == "STOP_LOSS" && !isStop) || (kind == "TAKE_PROFIT" && !isTake) {
+			continue
+		}
+		if _, err := t.client.NewCancelOrderService().Symbol(symbol).OrderID(order.OrderID).Do(context.Background()); err != nil {
+			cancelErrors = append(cancelErrors, fmt.Errorf("order %d: %w", order.OrderID, err))
+		}
+	}
+	if len(cancelErrors) > 0 {
+		return fmt.Errorf("failed to cancel %s %s protective orders: %v", symbol, kind, cancelErrors)
+	}
+	return nil
 }

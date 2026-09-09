@@ -5,7 +5,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -419,12 +421,13 @@ func TestGetBrOrderID(t *testing.T) {
 	}
 }
 
-func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
-	requests := make(chan map[string]string, 2)
+func TestBinanceQuantityScopedProtection(t *testing.T) {
+	requests := make(chan map[string]string, 4)
+	var orderAttempts int32
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/fapi/v1/exchangeInfo" {
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = w.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"}]}]}`))
+			_, _ = w.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"},{"filterType":"LOT_SIZE","stepSize":"0.001"}]}]}`))
 			return
 		}
 		if err := r.ParseForm(); err != nil {
@@ -438,6 +441,14 @@ func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
 			"workingType":   r.FormValue("workingType"),
 			"priceProtect":  r.FormValue("priceProtect"),
 		}
+		// Reject the very first order with a minimum-notional error to exercise
+		// the close-position fallback used for dust slices.
+		if atomic.AddInt32(&orderAttempts, 1) == 1 {
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"code":-4164,"msg":"Order's notional must be no smaller than 5.0 (unless you select reduceOnly)."}`))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"orderId":123,"status":"NEW","symbol":"BTCUSDT"}`))
 	}))
@@ -448,21 +459,38 @@ func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
 	client.HTTPClient = server.Client()
 	trader := &FuturesTrader{client: client}
 
-	if err := trader.SetStopLoss("BTCUSDT", "LONG", 0.01, 49000.123456); err != nil {
+	// Dust slice: scoped request is rejected for being below the minimum
+	// notional and must fall back to a close-position order.
+	if err := trader.SetStopLoss("BTCUSDT", "LONG", 0.001, 49000.123456); err != nil {
 		t.Fatal(err)
 	}
-	if err := trader.SetTakeProfit("BTCUSDT", "LONG", 0.01, 51000.123456); err != nil {
+	// Regular slice: quantity-scoped order.
+	if err := trader.SetTakeProfit("BTCUSDT", "LONG", 0.02, 51000.123456); err != nil {
 		t.Fatal(err)
 	}
 
-	for i := 0; i < 2; i++ {
-		request := <-requests
-		if request["closePosition"] != "true" {
-			t.Fatalf("expected closePosition=true, got %#v", request)
-		}
-		if request["quantity"] != "" {
-			t.Fatalf("Binance forbids quantity with closePosition=true, got %#v", request)
-		}
+	first := <-requests // rejected scoped stop-loss
+	if first["closePosition"] != "" {
+		t.Fatalf("scoped protection must not set closePosition, got %#v", first)
+	}
+	if qty, _ := strconv.ParseFloat(first["quantity"], 64); qty <= 0 {
+		t.Fatalf("scoped protection must carry a quantity, got %#v", first)
+	}
+
+	second := <-requests // fallback close-position stop-loss
+	if second["closePosition"] != "true" {
+		t.Fatalf("dust slice must fall back to closePosition=true, got %#v", second)
+	}
+
+	third := <-requests // scoped take-profit
+	if third["closePosition"] != "" {
+		t.Fatalf("scoped protection must not set closePosition, got %#v", third)
+	}
+	if qty, _ := strconv.ParseFloat(third["quantity"], 64); qty < 0.0199 || qty > 0.0201 {
+		t.Fatalf("expected take-profit quantity ~0.02, got %#v", third)
+	}
+
+	for _, request := range []map[string]string{first, second, third} {
 		// Trigger prices must be rounded to the symbol tick size, otherwise the
 		// exchange rejects the order with -4114 and the position gets force-closed.
 		if request["stopPrice"] != "49000.1" && request["stopPrice"] != "51000.1" {
