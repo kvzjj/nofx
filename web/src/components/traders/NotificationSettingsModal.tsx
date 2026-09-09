@@ -266,8 +266,8 @@ export function NotificationSettingsModal({
                   />
                   <p className="text-xs" style={{ color: '#848E9C' }}>
                     {language === 'zh'
-                      ? 'POST JSON，附带 X-NOFX-Signature: sha256=HMAC 头'
-                      : 'POST JSON with X-NOFX-Signature: sha256=HMAC header'}
+                      ? 'POST JSON，附带 X-AUAIEX-Signature: sha256=HMAC 头'
+                      : 'POST JSON with X-AUAIEX-Signature: sha256=HMAC header'}
                   </p>
                 </>
               )}

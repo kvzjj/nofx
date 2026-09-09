@@ -199,7 +199,7 @@ func (s *Service) sendWebhook(st *store.NotificationSettings, e *Event) error {
 	if st.WebhookSecret != "" {
 		mac := hmac.New(sha256.New, []byte(st.WebhookSecret))
 		mac.Write(payload)
-		req.Header.Set("X-NOFX-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
+		req.Header.Set("X-AUAIEX-Signature", "sha256="+hex.EncodeToString(mac.Sum(nil)))
 	}
 	resp, err := s.httpClient.Do(req)
 	if err != nil {
