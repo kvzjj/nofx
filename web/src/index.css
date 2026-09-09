@@ -217,7 +217,7 @@ body {
   z-index: 9999;
 }
 
-.nofx-toast {
+.auaiex-toast {
   background: #0b0e11 !important;
   border: 1px solid var(--panel-border) !important;
   color: var(--text-primary) !important;
@@ -225,57 +225,57 @@ body {
   border-radius: 6px !important;
 }
 
-.nofx-toast .sonner-title {
+.auaiex-toast .sonner-title {
   color: var(--text-primary) !important;
   font-weight: 700;
 }
 
-.nofx-toast .sonner-description {
+.auaiex-toast .sonner-description {
   color: var(--text-secondary) !important;
 }
 
 /* Success / Error / Warning tint */
-.nofx-toast[data-type='success'] {
+.auaiex-toast[data-type='success'] {
   background: #0b0e11 !important;
   border-color: var(--binance-green) !important;
   border-left: 3px solid var(--binance-green) !important;
 }
 
-.nofx-toast[data-type='success'] .sonner-title,
-.nofx-toast[data-type='success'] .sonner-description {
+.auaiex-toast[data-type='success'] .sonner-title,
+.auaiex-toast[data-type='success'] .sonner-description {
   color: var(--binance-green) !important;
 }
 
-.nofx-toast[data-type='error'] {
+.auaiex-toast[data-type='error'] {
   background: #0b0e11 !important;
   border-color: var(--binance-red) !important;
   border-left: 3px solid var(--binance-red) !important;
 }
 
-.nofx-toast[data-type='error'] .sonner-title,
-.nofx-toast[data-type='error'] .sonner-description {
+.auaiex-toast[data-type='error'] .sonner-title,
+.auaiex-toast[data-type='error'] .sonner-description {
   color: var(--binance-red) !important;
 }
 
-.nofx-toast[data-type='warning'],
-.nofx-toast[data-type='info'] {
+.auaiex-toast[data-type='warning'],
+.auaiex-toast[data-type='info'] {
   background: #0b0e11 !important;
   border-color: var(--binance-yellow) !important;
   border-left: 3px solid var(--binance-yellow) !important;
 }
 
-.nofx-toast[data-type='warning'] .sonner-title,
-.nofx-toast[data-type='warning'] .sonner-description,
-.nofx-toast[data-type='info'] .sonner-title,
-.nofx-toast[data-type='info'] .sonner-description {
+.auaiex-toast[data-type='warning'] .sonner-title,
+.auaiex-toast[data-type='warning'] .sonner-description,
+.auaiex-toast[data-type='info'] .sonner-title,
+.auaiex-toast[data-type='info'] .sonner-description {
   color: var(--binance-yellow) !important;
 }
 
-.nofx-toast .sonner-close-button {
+.auaiex-toast .sonner-close-button {
   color: var(--text-secondary) !important;
 }
 
-.nofx-toast .sonner-close-button:hover {
+.auaiex-toast .sonner-close-button:hover {
   color: var(--text-primary) !important;
 }
 

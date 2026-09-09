@@ -4,7 +4,7 @@ import { t } from '../i18n/translations'
 import { ChevronDown, TrendingUp, X } from 'lucide-react'
 
 // 支持的交易所列表 (TradingView 合约格式)
-// 保留与 NOFX 支持的交易所的对应关系；Hyperliquid/Aster 等 DEX
+// 保留与 AUAIEX 支持的交易所的对应关系；Hyperliquid/Aster 等 DEX
 // TradingView 暂无稳定合约代码，回退到 BINANCE
 const EXCHANGES = [
   { id: 'BINANCE', name: 'Binance', prefix: 'BINANCE:', suffix: '.P' },

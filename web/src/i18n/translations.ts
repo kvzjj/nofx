@@ -3,7 +3,7 @@ export type Language = 'en' | 'zh'
 export const translations = {
   en: {
     // Header
-    appTitle: 'NOFX',
+    appTitle: 'AUAIEX',
     subtitle: 'Multi-AI Model Trading Platform',
     aiTraders: 'AI Traders',
     details: 'Details',
@@ -25,7 +25,7 @@ export const translations = {
     faqNav: 'FAQ',
 
     // Footer
-    footerTitle: 'NOFX - AI Trading System',
+    footerTitle: 'AUAIEX - AI Trading System',
     footerWarning: '⚠️ Trading involves risk. Use at your own discretion.',
 
     // Stats Cards
@@ -135,7 +135,7 @@ export const translations = {
     failedCol: 'Failed',
     secretField: 'secret',
     channelHelp:
-      'Telegram: create a bot via @BotFather, then message it (or add it to a group) and use the chat ID. Webhook receives JSON POST with HMAC-SHA256 signature header X-Nofx-Signature when a secret is set. Email uses your own SMTP server.',
+      'Telegram: create a bot via @BotFather, then message it (or add it to a group) and use the chat ID. Webhook receives JSON POST with HMAC-SHA256 signature header X-Auaiex-Signature when a secret is set. Email uses your own SMTP server.',
 
     // Settings page
     settingsNav: 'Settings',
@@ -887,20 +887,20 @@ export const translations = {
     heroTitle1: 'Read the Market.',
     heroTitle2: 'Write the Trade.',
     heroDescription:
-      'NOFX is the future standard for AI trading — an open, community-driven agentic trading OS. Supporting Binance and OKX, self-hosted, multi-agent competition, let AI automatically make decisions, execute and optimize trades for you.',
+      'AUAIEX is the future standard for AI trading — an open, community-driven agentic trading OS. Supporting Binance and OKX, self-hosted, multi-agent competition, let AI automatically make decisions, execute and optimize trades for you.',
     poweredBy:
       'Powered by Binance and OKX, strategically invested by Amber.ac.',
 
     // Landing Page CTA
     readyToDefine: 'Ready to define the future of AI trading?',
     startWithCrypto:
-      'Starting with crypto markets, expanding to TradFi. NOFX is the infrastructure of AgentFi.',
+      'Starting with crypto markets, expanding to TradFi. AUAIEX is the infrastructure of AgentFi.',
     getStartedNow: 'Get Started Now',
     viewSourceCode: 'View Source Code',
 
     // Features Section
     coreFeatures: 'Core Features',
-    whyChooseNofx: 'Why Choose NOFX?',
+    whyChooseAuaiex: 'Why Choose AUAIEX?',
     openCommunityDriven:
       'Open source, transparent, community-driven AI trading OS',
     openSourceSelfHosted: '100% Open Source & Self-Hosted',
@@ -926,19 +926,19 @@ export const translations = {
     secureFeatures4: 'Trading log auditing',
 
     // About Section
-    aboutNofx: 'About NOFX',
-    whatIsNofx: 'What is NOFX?',
-    nofxNotAnotherBot:
-      "NOFX is not another trading bot, but the 'Linux' of AI trading —",
-    nofxDescription1:
+    aboutAuaiex: 'About AUAIEX',
+    whatIsAuaiex: 'What is AUAIEX?',
+    auaiexNotAnotherBot:
+      "AUAIEX is not another trading bot, but the 'Linux' of AI trading —",
+    auaiexDescription1:
       'a transparent, trustworthy open source OS that provides a unified',
-    nofxDescription2:
+    auaiexDescription2:
       "'decision-risk-execution' layer, supporting all asset classes.",
-    nofxDescription3:
+    auaiexDescription3:
       'Starting with crypto markets (24/7, high volatility perfect testing ground), future expansion to stocks, futures, forex. Core: open architecture, AI',
-    nofxDescription4:
+    auaiexDescription4:
       'Darwinism (multi-agent self-competition, strategy evolution), CodeFi',
-    nofxDescription5:
+    auaiexDescription5:
       'flywheel (developers get point rewards for PR contributions).',
     youFullControl: 'You 100% Control',
     fullControlDesc: 'Complete control over AI prompts and funds',
@@ -947,12 +947,12 @@ export const translations = {
     startupMessages3: 'Web console http://localhost:3000',
 
     // How It Works Section
-    howToStart: 'How to Get Started with NOFX',
+    howToStart: 'How to Get Started with AUAIEX',
     fourSimpleSteps:
       'Four simple steps to start your AI automated trading journey',
     step1Title: 'Clone GitHub Repository',
     step1Desc:
-      'git clone https://github.com/tinkle-community/nofx and switch to dev branch to test new features.',
+      'git clone https://github.com/tinkle-community/auaiex and switch to dev branch to test new features.',
     step2Title: 'Configure Environment',
     step2Desc:
       'Frontend setup for exchange APIs (Binance and OKX), AI models and custom prompts.',
@@ -964,7 +964,7 @@ export const translations = {
       'Monitor trading, submit PRs to improve framework. Join Telegram to share strategies.',
     importantRiskWarning: 'Important Risk Warning',
     riskWarningText:
-      'Dev branch is unstable, do not use funds you cannot afford to lose. NOFX is non-custodial, no official strategies. Trading involves risks, invest carefully.',
+      'Dev branch is unstable, do not use funds you cannot afford to lose. AUAIEX is non-custodial, no official strategies. Trading involves risks, invest carefully.',
 
     // Community Section (testimonials are kept as-is since they are quotes)
 
@@ -977,7 +977,7 @@ export const translations = {
     strategicInvestment: '(Strategic Investment)',
 
     // Login Modal
-    accessNofxPlatform: 'Access NOFX Platform',
+    accessAuaiexPlatform: 'Access AUAIEX Platform',
     loginRegisterPrompt:
       'Please login or register to access the full AI trading platform',
     registerNewAccount: 'Register New Account',
@@ -1003,7 +1003,7 @@ export const translations = {
 
     // FAQ Page
     faqTitle: 'Frequently Asked Questions',
-    faqSubtitle: 'Find answers to common questions about NOFX',
+    faqSubtitle: 'Find answers to common questions about AUAIEX',
     faqStillHaveQuestions: 'Still Have Questions?',
     faqContactUs: 'Join our community or check our GitHub for more help',
 
@@ -1017,30 +1017,30 @@ export const translations = {
     faqCategoryData: 'Data & Privacy',
 
     // FAQ Questions & Answers - General
-    faqWhatIsNOFX: 'What is NOFX?',
-    faqWhatIsNOFXAnswer:
-      'NOFX is an AI-powered cryptocurrency trading bot that uses large language models (LLMs) to make trading decisions on futures markets.',
+    faqWhatIsAUAIEX: 'What is AUAIEX?',
+    faqWhatIsAUAIEXAnswer:
+      'AUAIEX is an AI-powered cryptocurrency trading bot that uses large language models (LLMs) to make trading decisions on futures markets.',
 
     faqSupportedExchanges: 'Which exchanges are supported?',
     faqSupportedExchangesAnswer:
       'Binance Futures and OKX Futures are supported.',
 
-    faqIsProfitable: 'Is NOFX profitable?',
+    faqIsProfitable: 'Is AUAIEX profitable?',
     faqIsProfitableAnswer:
       'AI trading is experimental and not guaranteed to be profitable. Always start with small amounts and never invest more than you can afford to lose.',
 
     faqMultipleTraders: 'Can I run multiple traders simultaneously?',
     faqMultipleTradersAnswer:
-      'Yes! NOFX supports running multiple traders with different configurations, AI models, and trading strategies.',
+      'Yes! AUAIEX supports running multiple traders with different configurations, AI models, and trading strategies.',
 
     // Contributing & Community
     faqGithubProjectsTasks: 'How to use GitHub Projects and pick up tasks?',
     faqGithubProjectsTasksAnswer:
-      'Roadmap: https://github.com/orgs/NoFxAiOS/projects/3  • Task Dashboard: https://github.com/orgs/NoFxAiOS/projects/5  • Steps: Open links → filter by labels (good first issue / help wanted / frontend / backend) → read Description & Acceptance Criteria → comment "assign me" or self-assign → Fork the repo → sync your fork\'s dev with upstream/dev → create a feature branch from your fork\'s dev → push to your fork → open PR (base: NoFxAiOS/nofx:dev ← compare: your-username/nofx:feat/your-topic) → reference Issue (Closes #123) and use the proper template.',
+      'Roadmap: https://github.com/orgs/AuaiexAI/projects/3  • Task Dashboard: https://github.com/orgs/AuaiexAI/projects/5  • Steps: Open links → filter by labels (good first issue / help wanted / frontend / backend) → read Description & Acceptance Criteria → comment "assign me" or self-assign → Fork the repo → sync your fork\'s dev with upstream/dev → create a feature branch from your fork\'s dev → push to your fork → open PR (base: AuaiexAI/auaiex:dev ← compare: your-username/auaiex:feat/your-topic) → reference Issue (Closes #123) and use the proper template.',
 
     faqContributePR: 'How to properly submit PRs and contribute?',
     faqContributePRAnswer:
-      "Guidelines: • Fork first; branch from your fork's dev (avoid direct commits to upstream main) • Branch naming: feat/..., fix/..., docs/...; Conventional Commits • Run checks before PR: npm --prefix web run lint && npm --prefix web run build • For UI changes, attach screenshots or a short video • Choose the proper PR template (frontend/backend/docs/general) • Open PR from your fork to NoFxAiOS/nofx:dev and link Issue (Closes #123) • Keep rebasing onto upstream/dev; ensure CI passes; prefer small, focused PRs • Read CONTRIBUTING.md and .github/PR_TITLE_GUIDE.md",
+      "Guidelines: • Fork first; branch from your fork's dev (avoid direct commits to upstream main) • Branch naming: feat/..., fix/..., docs/...; Conventional Commits • Run checks before PR: npm --prefix web run lint && npm --prefix web run build • For UI changes, attach screenshots or a short video • Choose the proper PR template (frontend/backend/docs/general) • Open PR from your fork to AuaiexAI/auaiex:dev and link Issue (Closes #123) • Keep rebasing onto upstream/dev; ensure CI passes; prefer small, focused PRs • Read CONTRIBUTING.md and .github/PR_TITLE_GUIDE.md",
 
     // Setup & Configuration
     faqSystemRequirements: 'What are the system requirements?',
@@ -1049,7 +1049,7 @@ export const translations = {
 
     faqNeedCoding: 'Do I need coding experience?',
     faqNeedCodingAnswer:
-      'No! NOFX has a web UI for all configuration. However, basic command line knowledge helps with setup and troubleshooting.',
+      'No! AUAIEX has a web UI for all configuration. However, basic command line knowledge helps with setup and troubleshooting.',
 
     faqGetApiKeys: 'How do I get API keys?',
     faqGetApiKeysAnswer:
@@ -1057,7 +1057,7 @@ export const translations = {
 
     faqUseSubaccount: 'Should I use a subaccount?',
     faqUseSubaccountAnswer:
-      'Recommended: Yes, use a subaccount dedicated to NOFX for better risk isolation. However, note that some subaccounts have restrictions (e.g., 5x max leverage on Binance).',
+      'Recommended: Yes, use a subaccount dedicated to AUAIEX for better risk isolation. However, note that some subaccounts have restrictions (e.g., 5x max leverage on Binance).',
 
     faqDockerDeployment: 'Docker deployment keeps failing',
     faqDockerDeploymentAnswer:
@@ -1094,7 +1094,7 @@ export const translations = {
 
     faqHighFees: 'Trading fees are too high',
     faqHighFeesAnswer:
-      'NOFX default 3-minute scan interval can cause frequent trading. Solutions: Increase decision interval to 5-10 minutes; Optimize system prompt to reduce overtrading; Adjust leverage to reduce position sizes.',
+      'AUAIEX default 3-minute scan interval can cause frequent trading. Solutions: Increase decision interval to 5-10 minutes; Optimize system prompt to reduce overtrading; Adjust leverage to reduce position sizes.',
 
     faqNoTakeProfit: "AI doesn't close profitable positions",
     faqNoTakeProfitAnswer:
@@ -1111,7 +1111,7 @@ export const translations = {
 
     faqPortInUse: "Backend won't start / Port already in use",
     faqPortInUseAnswer:
-      'Check what\'s using port 8080 with "lsof -i :8080" and change the port in your .env file with NOFX_BACKEND_PORT=8081.',
+      'Check what\'s using port 8080 with "lsof -i :8080" and change the port in your .env file with AUAIEX_BACKEND_PORT=8081.',
 
     faqFrontendLoading: 'Frontend shows "Loading..." forever',
     faqFrontendLoadingAnswer:
@@ -1119,7 +1119,7 @@ export const translations = {
 
     faqDatabaseLocked: 'Database locked error',
     faqDatabaseLockedAnswer:
-      'Stop all NOFX processes with "docker compose down" or "pkill nofx", then restart with "docker compose up -d".',
+      'Stop all AUAIEX processes with "docker compose down" or "pkill auaiex", then restart with "docker compose up -d".',
 
     faqAiLearningFailed: 'AI learning data failed to load',
     faqAiLearningFailedAnswer:
@@ -1144,7 +1144,7 @@ export const translations = {
 
     faqAiLearning: 'Does the AI learn from its mistakes?',
     faqAiLearningAnswer:
-      'Yes, to some extent. NOFX provides historical performance feedback in each decision prompt, allowing the AI to adjust its strategy.',
+      'Yes, to some extent. AUAIEX provides historical performance feedback in each decision prompt, allowing the AI to adjust its strategy.',
 
     faqOnlyShort: 'AI only opens short positions, no long positions',
     faqOnlyShortAnswer:
@@ -1192,7 +1192,7 @@ export const translations = {
         'Avoid embedding the app in insecure HTTP iframes or reverse proxies that strip HTTPS.',
       unsupportedTitle: 'Browser does not expose Web Crypto',
       unsupportedDesc:
-        'Open NOFX over HTTPS (or http://localhost during development) and avoid insecure iframes/reverse proxies so the browser can enable Web Crypto.',
+        'Open AUAIEX over HTTPS (or http://localhost during development) and avoid insecure iframes/reverse proxies so the browser can enable Web Crypto.',
       summary: 'Current origin: {origin} • Protocol: {protocol}',
       disabledTitle: 'Transport encryption disabled',
       disabledDesc:
@@ -1235,7 +1235,7 @@ export const translations = {
   },
   zh: {
     // Header
-    appTitle: 'NOFX',
+    appTitle: 'AUAIEX',
     subtitle: '多AI模型交易平台',
     aiTraders: 'AI交易员',
     details: '详情',
@@ -1257,7 +1257,7 @@ export const translations = {
     faqNav: '常见问题',
 
     // Footer
-    footerTitle: 'NOFX - AI交易系统',
+    footerTitle: 'AUAIEX - AI交易系统',
     footerWarning: '⚠️ 交易有风险，请谨慎使用。',
 
     // Stats Cards
@@ -1365,7 +1365,7 @@ export const translations = {
     failedCol: '失败',
     secretField: '密钥',
     channelHelp:
-      'Telegram：通过 @BotFather 创建机器人，先给机器人发一条消息（或将其拉入群），再填入 chat_id。Webhook 接收 JSON POST，设置 secret 后会附带 HMAC-SHA256 签名头 X-Nofx-Signature。邮箱使用你自己的 SMTP 服务器。',
+      'Telegram：通过 @BotFather 创建机器人，先给机器人发一条消息（或将其拉入群），再填入 chat_id。Webhook 接收 JSON POST，设置 secret 后会附带 HMAC-SHA256 签名头 X-Auaiex-Signature。邮箱使用你自己的 SMTP 服务器。',
 
     // Settings page
     settingsNav: '设置',
@@ -2071,19 +2071,19 @@ export const translations = {
     heroTitle1: 'Read the Market.',
     heroTitle2: 'Write the Trade.',
     heroDescription:
-      'NOFX 是 AI 交易的未来标准——一个开放、社区驱动的代理式交易操作系统。支持 Binance 和 OKX，自托管、多代理竞争，让 AI 为你自动决策、执行和优化交易。',
+      'AUAIEX 是 AI 交易的未来标准——一个开放、社区驱动的代理式交易操作系统。支持 Binance 和 OKX，自托管、多代理竞争，让 AI 为你自动决策、执行和优化交易。',
     poweredBy: '由 Binance 和 OKX 提供支持，Amber.ac 战略投资。',
 
     // Landing Page CTA
     readyToDefine: '准备好定义 AI 交易的未来吗？',
     startWithCrypto:
-      '从加密市场起步，扩展到 TradFi。NOFX 是 AgentFi 的基础架构。',
+      '从加密市场起步，扩展到 TradFi。AUAIEX 是 AgentFi 的基础架构。',
     getStartedNow: '立即开始',
     viewSourceCode: '查看源码',
 
     // Features Section
     coreFeatures: '核心功能',
-    whyChooseNofx: '为什么选择 NOFX？',
+    whyChooseAuaiex: '为什么选择 AUAIEX？',
     openCommunityDriven: '开源、透明、社区驱动的 AI 交易操作系统',
     openSourceSelfHosted: '100% 开源与自托管',
     openSourceDesc: '你的框架，你的规则。非黑箱，支持自定义提示词和多模型。',
@@ -2105,16 +2105,16 @@ export const translations = {
     secureFeatures4: '交易日志审计',
 
     // About Section
-    aboutNofx: '关于 NOFX',
-    whatIsNofx: '什么是 NOFX？',
-    nofxNotAnotherBot: "NOFX 不是另一个交易机器人，而是 AI 交易的 'Linux' ——",
-    nofxDescription1: "一个透明、可信任的开源 OS，提供统一的 '决策-风险-执行'",
-    nofxDescription2: '层，支持所有资产类别。',
-    nofxDescription3:
+    aboutAuaiex: '关于 AUAIEX',
+    whatIsAuaiex: '什么是 AUAIEX？',
+    auaiexNotAnotherBot: "AUAIEX 不是另一个交易机器人，而是 AI 交易的 'Linux' ——",
+    auaiexDescription1: "一个透明、可信任的开源 OS，提供统一的 '决策-风险-执行'",
+    auaiexDescription2: '层，支持所有资产类别。',
+    auaiexDescription3:
       '从加密市场起步（24/7、高波动性完美测试场），未来扩展到股票、期货、外汇。核心：开放架构、AI',
-    nofxDescription4:
+    auaiexDescription4:
       '达尔文主义（多代理自竞争、策略进化）、CodeFi 飞轮（开发者 PR',
-    nofxDescription5: '贡献获积分奖励）。',
+    auaiexDescription5: '贡献获积分奖励）。',
     youFullControl: '你 100% 掌控',
     fullControlDesc: '完全掌控 AI 提示词和资金',
     startupMessages1: '启动自动交易系统...',
@@ -2122,11 +2122,11 @@ export const translations = {
     startupMessages3: 'Web 控制台 http://localhost:3000',
 
     // How It Works Section
-    howToStart: '如何开始使用 NOFX',
+    howToStart: '如何开始使用 AUAIEX',
     fourSimpleSteps: '四个简单步骤，开启 AI 自动交易之旅',
     step1Title: '拉取 GitHub 仓库',
     step1Desc:
-      'git clone https://github.com/tinkle-community/nofx 并切换到 dev 分支测试新功能。',
+      'git clone https://github.com/tinkle-community/auaiex 并切换到 dev 分支测试新功能。',
     step2Title: '配置环境',
     step2Desc: '前端设置交易所 API（Binance 和 OKX）、AI 模型和自定义提示词。',
     step3Title: '部署与运行',
@@ -2136,7 +2136,7 @@ export const translations = {
     step4Desc: '监控交易，提交 PR 改进框架。加入 Telegram 分享策略。',
     importantRiskWarning: '重要风险提示',
     riskWarningText:
-      'dev 分支不稳定，勿用无法承受损失的资金。NOFX 非托管，无官方策略。交易有风险，投资需谨慎。',
+      'dev 分支不稳定，勿用无法承受损失的资金。AUAIEX 非托管，无官方策略。交易有风险，投资需谨慎。',
 
     // Community Section (testimonials are kept as-is since they are quotes)
 
@@ -2149,7 +2149,7 @@ export const translations = {
     strategicInvestment: '(战略投资)',
 
     // Login Modal
-    accessNofxPlatform: '访问 NOFX 平台',
+    accessAuaiexPlatform: '访问 AUAIEX 平台',
     loginRegisterPrompt: '请选择登录或注册以访问完整的 AI 交易平台',
     registerNewAccount: '注册新账号',
 
@@ -2171,7 +2171,7 @@ export const translations = {
 
     // FAQ Page
     faqTitle: '常见问题',
-    faqSubtitle: '查找关于 NOFX 的常见问题解答',
+    faqSubtitle: '查找关于 AUAIEX 的常见问题解答',
     faqStillHaveQuestions: '还有其他问题？',
     faqContactUs: '加入我们的社区或查看 GitHub 获取更多帮助',
 
@@ -2185,30 +2185,30 @@ export const translations = {
     faqCategoryData: '数据与隐私',
 
     // FAQ Questions & Answers - General
-    faqWhatIsNOFX: 'NOFX 是什么？',
-    faqWhatIsNOFXAnswer:
-      'NOFX 是一个 AI 驱动的加密货币交易机器人，使用大语言模型（LLM）在期货市场进行交易决策。',
+    faqWhatIsAUAIEX: 'AUAIEX 是什么？',
+    faqWhatIsAUAIEXAnswer:
+      'AUAIEX 是一个 AI 驱动的加密货币交易机器人，使用大语言模型（LLM）在期货市场进行交易决策。',
 
     faqSupportedExchanges: '支持哪些交易所？',
     faqSupportedExchangesAnswer:
       '支持币安合约（Binance Futures）和 OKX Futures。',
 
-    faqIsProfitable: 'NOFX 能盈利吗？',
+    faqIsProfitable: 'AUAIEX 能盈利吗？',
     faqIsProfitableAnswer:
       'AI 交易是实验性的，不保证盈利。请始终用小额资金测试，不要投入超过您承受能力的资金。',
 
     faqMultipleTraders: '可以同时运行多个交易员吗？',
     faqMultipleTradersAnswer:
-      '可以！NOFX 支持运行多个交易员，每个可配置不同的 AI 模型和交易策略。',
+      '可以！AUAIEX 支持运行多个交易员，每个可配置不同的 AI 模型和交易策略。',
 
     // Contributing & Community
     faqGithubProjectsTasks: '如何在 GitHub Projects 中领取任务？',
     faqGithubProjectsTasksAnswer:
-      '路线图：https://github.com/orgs/NoFxAiOS/projects/3 ｜ 任务看板：https://github.com/orgs/NoFxAiOS/projects/5 ｜ 步骤：打开链接 → 按标签筛选（good first issue / help wanted / frontend / backend）→ 阅读描述与验收标准 → 评论“assign me”或自助分配 → Fork 仓库 → 同步你 fork 的 dev 与 upstream/dev → 从你 fork 的 dev 创建特性分支 → 推送到你的 fork → 打开 PR（base：NoFxAiOS/nofx:dev ← compare：你的用户名/nofx:feat/your-topic）→ 关联 Issue（Closes #123）并选择正确模板。',
+      '路线图：https://github.com/orgs/AuaiexAI/projects/3 ｜ 任务看板：https://github.com/orgs/AuaiexAI/projects/5 ｜ 步骤：打开链接 → 按标签筛选（good first issue / help wanted / frontend / backend）→ 阅读描述与验收标准 → 评论“assign me”或自助分配 → Fork 仓库 → 同步你 fork 的 dev 与 upstream/dev → 从你 fork 的 dev 创建特性分支 → 推送到你的 fork → 打开 PR（base：AuaiexAI/auaiex:dev ← compare：你的用户名/auaiex:feat/your-topic）→ 关联 Issue（Closes #123）并选择正确模板。',
 
     faqContributePR: '如何规范地提交 PR 并参与贡献？',
     faqContributePRAnswer:
-      '规范：• 先 Fork；在你的 fork 的 dev 分支上创建特性分支（避免直接向上游 main 提交）• 分支命名：feat/...、fix/...、docs/...；提交信息遵循 Conventional Commits • PR 前运行检查：npm --prefix web run lint && npm --prefix web run build • 涉及 UI 变更请附截图/短视频 • 选择正确 PR 模板（frontend/backend/docs/general）• 从你的 fork 发起到 NoFxAiOS/nofx:dev，并在 PR 中关联 Issue（Closes #123）• 持续 rebase 到 upstream/dev，确保 CI 通过；尽量保持 PR 小而聚焦 • 参考 CONTRIBUTING.md 与 .github/PR_TITLE_GUIDE.md',
+      '规范：• 先 Fork；在你的 fork 的 dev 分支上创建特性分支（避免直接向上游 main 提交）• 分支命名：feat/...、fix/...、docs/...；提交信息遵循 Conventional Commits • PR 前运行检查：npm --prefix web run lint && npm --prefix web run build • 涉及 UI 变更请附截图/短视频 • 选择正确 PR 模板（frontend/backend/docs/general）• 从你的 fork 发起到 AuaiexAI/auaiex:dev，并在 PR 中关联 Issue（Closes #123）• 持续 rebase 到 upstream/dev，确保 CI 通过；尽量保持 PR 小而聚焦 • 参考 CONTRIBUTING.md 与 .github/PR_TITLE_GUIDE.md',
 
     // Setup & Configuration
     faqSystemRequirements: '系统要求是什么？',
@@ -2217,7 +2217,7 @@ export const translations = {
 
     faqNeedCoding: '需要编程经验吗？',
     faqNeedCodingAnswer:
-      '不需要！NOFX 有 Web 界面进行所有配置。但基础的命令行知识有助于安装和故障排查。',
+      '不需要！AUAIEX 有 Web 界面进行所有配置。但基础的命令行知识有助于安装和故障排查。',
 
     faqGetApiKeys: '如何获取 API 密钥？',
     faqGetApiKeysAnswer:
@@ -2225,7 +2225,7 @@ export const translations = {
 
     faqUseSubaccount: '应该使用子账户吗？',
     faqUseSubaccountAnswer:
-      '推荐：是的，使用专门的子账户运行 NOFX 可以更好地隔离风险。但请注意，某些子账户有限制（例如币安子账户最高 5 倍杠杆）。',
+      '推荐：是的，使用专门的子账户运行 AUAIEX 可以更好地隔离风险。但请注意，某些子账户有限制（例如币安子账户最高 5 倍杠杆）。',
 
     faqDockerDeployment: 'Docker 部署一直失败',
     faqDockerDeploymentAnswer:
@@ -2262,7 +2262,7 @@ export const translations = {
 
     faqHighFees: '交易手续费太高',
     faqHighFeesAnswer:
-      'NOFX 默认 3 分钟扫描间隔会导致频繁交易。解决方案：将决策间隔增加到 5-10 分钟；优化系统提示词减少过度交易；调整杠杆降低仓位大小。',
+      'AUAIEX 默认 3 分钟扫描间隔会导致频繁交易。解决方案：将决策间隔增加到 5-10 分钟；优化系统提示词减少过度交易；调整杠杆降低仓位大小。',
 
     faqNoTakeProfit: 'AI 不平掉盈利的仓位',
     faqNoTakeProfitAnswer:
@@ -2279,7 +2279,7 @@ export const translations = {
 
     faqPortInUse: '后端无法启动 / 端口被占用',
     faqPortInUseAnswer:
-      '使用 "lsof -i :8080" 查看占用端口的进程，在 .env 中修改端口：NOFX_BACKEND_PORT=8081。',
+      '使用 "lsof -i :8080" 查看占用端口的进程，在 .env 中修改端口：AUAIEX_BACKEND_PORT=8081。',
 
     faqFrontendLoading: '前端一直显示"加载中..."',
     faqFrontendLoadingAnswer:
@@ -2287,7 +2287,7 @@ export const translations = {
 
     faqDatabaseLocked: '数据库锁定错误',
     faqDatabaseLockedAnswer:
-      '使用 "docker compose down" 或 "pkill nofx" 停止所有 NOFX 进程，然后使用 "docker compose up -d" 重启。',
+      '使用 "docker compose down" 或 "pkill auaiex" 停止所有 AUAIEX 进程，然后使用 "docker compose up -d" 重启。',
 
     faqAiLearningFailed: 'AI 学习数据加载失败',
     faqAiLearningFailedAnswer:
@@ -2312,7 +2312,7 @@ export const translations = {
 
     faqAiLearning: 'AI 会从错误中学习吗？',
     faqAiLearningAnswer:
-      '会的，在一定程度上。NOFX 在每次决策提示中提供历史表现反馈，允许 AI 调整策略。',
+      '会的，在一定程度上。AUAIEX 在每次决策提示中提供历史表现反馈，允许 AI 调整策略。',
 
     faqOnlyShort: 'AI 只开空单，不开多单',
     faqOnlyShortAnswer:
@@ -2357,7 +2357,7 @@ export const translations = {
         '避免把应用嵌入在不安全的 HTTP iframe 或会降级协议的反向代理中。',
       unsupportedTitle: '浏览器未提供 Web Crypto',
       unsupportedDesc:
-        '请通过 HTTPS 或本机 localhost 访问 NOFX，并避免嵌入不安全 iframe/反向代理，以符合浏览器的 Web Crypto 规则。',
+        '请通过 HTTPS 或本机 localhost 访问 AUAIEX，并避免嵌入不安全 iframe/反向代理，以符合浏览器的 Web Crypto 规则。',
       summary: '当前来源：{origin} · 协议：{protocol}',
       disabledTitle: '传输加密已禁用',
       disabledDesc:

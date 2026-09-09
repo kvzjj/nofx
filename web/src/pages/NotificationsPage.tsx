@@ -40,7 +40,7 @@ const CHANNEL_FIELDS: Record<
     { key: 'smtp_port', placeholder: '587' },
     { key: 'smtp_user', secret: true, placeholder: 'user@gmail.com' },
     { key: 'smtp_pass', secret: true, placeholder: 'app password' },
-    { key: 'from', placeholder: 'nofx@example.com' },
+    { key: 'from', placeholder: 'auaiex@example.com' },
     { key: 'to', placeholder: 'me@example.com' },
   ],
 }

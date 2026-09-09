@@ -14,7 +14,7 @@ function getShortName(fullName: string): string {
 
 // 交易所注册链接配置（仅支持币安）
 const EXCHANGE_REGISTRATION_LINKS: Record<string, { url: string; hasReferral?: boolean }> = {
-  binance: { url: 'https://www.binance.com/join?ref=NOFXENG', hasReferral: true },
+  binance: { url: 'https://www.binance.com/join?ref=AUAIEXENG', hasReferral: true },
 }
 
 import type { TraderConfigData } from '../types'

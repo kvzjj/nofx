@@ -101,7 +101,7 @@ export function ExchangeConfigModal({
 
   // 交易所注册链接配置
   const exchangeRegistrationLinks: Record<string, { url: string; hasReferral?: boolean }> = {
-    binance: { url: 'https://www.binance.com/join?ref=NOFXENG', hasReferral: true },
+    binance: { url: 'https://www.binance.com/join?ref=AUAIEXENG', hasReferral: true },
   }
 
   // 如果是编辑现有交易所，初始化表单数据

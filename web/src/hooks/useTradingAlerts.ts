@@ -61,7 +61,7 @@ export function useTradingAlerts({
       Notification.permission === 'granted'
     ) {
       try {
-        const n = new Notification(title, { body, icon: '/icons/nofx.svg' })
+        const n = new Notification(title, { body, icon: '/icons/auaiex.svg' })
         // 点击通知时回到交易页面
         n.onclick = () => {
           window.focus()

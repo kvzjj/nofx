@@ -149,33 +149,6 @@ export function FAQLayout({ language }: FAQLayoutProps) {
         <p className="mb-6" style={{ color: '#848E9C' }}>
           {t('faqContactUs', language)}
         </p>
-        <div className="flex items-center justify-center gap-4">
-          <a
-            href="https://github.com/tinkle-community/nofx"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-6 py-3 rounded-lg font-semibold transition-all hover:scale-105"
-            style={{
-              background: '#1E2329',
-              color: '#EAECEF',
-              border: '1px solid #2B3139',
-            }}
-          >
-            GitHub
-          </a>
-          <a
-            href="https://t.me/nofx_dev_community"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="px-6 py-3 rounded-lg font-semibold transition-all hover:scale-105"
-            style={{
-              background: 'linear-gradient(135deg, #F0B90B 0%, #FCD535 100%)',
-              color: '#0B0E11',
-            }}
-          >
-            {t('community', language)}
-          </a>
-        </div>
       </div>
     </Container>
   )
