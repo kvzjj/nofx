@@ -1358,3 +1358,17 @@ tr:hover {
     padding: 1rem;
   }
 }
+
+/* ============ 亮色主题（实验性） ============ */
+/* 大量组件使用内联暗色样式，此处用反色滤镜实现可用的亮色模式，
+   图片/SVG/图表二次反色还原。 */
+html[data-theme='light'] {
+  filter: invert(1) hue-rotate(180deg);
+  background: #f5f6f8;
+}
+html[data-theme='light'] img,
+html[data-theme='light'] video,
+html[data-theme='light'] picture,
+html[data-theme='light'] [style*='background-image'] {
+  filter: invert(1) hue-rotate(180deg);
+}

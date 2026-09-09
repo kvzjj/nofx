@@ -56,6 +56,13 @@ type ProtectionOrder struct {
 	Status       string
 }
 
+// OrderRecord is a persisted trade order enriched with timestamps for display.
+type OrderRecord struct {
+	TradeOrder
+	CreatedAt time.Time
+	UpdatedAt time.Time
+}
+
 func NewExecutionStore(db *sql.DB) *ExecutionStore {
 	return &ExecutionStore{db: db}
 }
@@ -398,4 +405,226 @@ func (s *ExecutionStore) ListProtectionOrders(traderID, exchangeID, entryOrderID
 		result = append(result, order)
 	}
 	return result, rows.Err()
+}
+
+// ListOrderHistory returns the most recent orders (newest first) with
+// pagination, scoped to one trader + exchange account.
+func (s *ExecutionStore) ListOrderHistory(traderID, exchangeID string, limit, offset int) ([]OrderRecord, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.Query(`
+		SELECT trader_id, exchange_id, exchange_type, order_id, symbol,
+			position_side, action, requested_qty, executed_qty, avg_price,
+			fee, status, last_error, leverage, stop_loss, take_profit,
+			protected_qty, protection_status, created_at, updated_at
+		FROM trade_orders
+		WHERE trader_id = ? AND exchange_id = ?
+		ORDER BY created_at DESC
+		LIMIT ? OFFSET ?
+	`, traderID, exchangeID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list order history: %w", err)
+	}
+	defer rows.Close()
+
+	var orders []OrderRecord
+	for rows.Next() {
+		var rec OrderRecord
+		var createdAt, updatedAt string
+		if err := rows.Scan(
+			&rec.TraderID, &rec.ExchangeID, &rec.ExchangeType,
+			&rec.OrderID, &rec.Symbol, &rec.PositionSide, &rec.Action,
+			&rec.RequestedQty, &rec.ExecutedQty, &rec.AvgPrice,
+			&rec.Fee, &rec.Status, &rec.LastError, &rec.Leverage,
+			&rec.StopLoss, &rec.TakeProfit, &rec.ProtectedQty,
+			&rec.ProtectionStatus, &createdAt, &updatedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan order history row: %w", err)
+		}
+		rec.CreatedAt = parseStoredTime(createdAt)
+		rec.UpdatedAt = parseStoredTime(updatedAt)
+		orders = append(orders, rec)
+	}
+	return orders, rows.Err()
+}
+
+// CountOrders returns the total number of persisted orders for pagination.
+func (s *ExecutionStore) CountOrders(traderID, exchangeID string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM trade_orders WHERE trader_id = ? AND exchange_id = ?
+	`, traderID, exchangeID).Scan(&count)
+	return count, err
+}
+
+// ListFillHistory returns the most recent exchange fills (newest first) with
+// pagination. Fills carry realized PnL, fee and execution time.
+func (s *ExecutionStore) ListFillHistory(traderID, exchangeID string, limit, offset int) ([]ExchangeFill, error) {
+	if limit <= 0 || limit > 200 {
+		limit = 50
+	}
+	if offset < 0 {
+		offset = 0
+	}
+	rows, err := s.db.Query(`
+		SELECT trade_id, order_id, symbol, position_side, side,
+			quantity, price, fee, realized_pnl, executed_at
+		FROM exchange_fills
+		WHERE trader_id = ? AND exchange_id = ?
+		ORDER BY executed_at DESC
+		LIMIT ? OFFSET ?
+	`, traderID, exchangeID, limit, offset)
+	if err != nil {
+		return nil, fmt.Errorf("failed to list fill history: %w", err)
+	}
+	defer rows.Close()
+
+	fills := make([]ExchangeFill, 0, limit)
+	for rows.Next() {
+		var fill ExchangeFill
+		var executedAt string
+		if err := rows.Scan(
+			&fill.TradeID, &fill.OrderID, &fill.Symbol, &fill.PositionSide,
+			&fill.Side, &fill.Quantity, &fill.Price, &fill.Fee,
+			&fill.RealizedPnL, &executedAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan fill history row: %w", err)
+		}
+		fill.TraderID = traderID
+		fill.ExchangeID = exchangeID
+		fill.ExecutedAt = parseStoredTime(executedAt)
+		fills = append(fills, fill)
+	}
+	return fills, rows.Err()
+}
+
+// CountFills returns the total number of persisted exchange fills for pagination.
+func (s *ExecutionStore) CountFills(traderID, exchangeID string) (int, error) {
+	var count int
+	err := s.db.QueryRow(`
+		SELECT COUNT(*) FROM exchange_fills WHERE trader_id = ? AND exchange_id = ?
+	`, traderID, exchangeID).Scan(&count)
+	return count, err
+}
+
+// parseStoredTime parses a stored RFC3339 timestamp, falling back to now on
+// malformed values so listings never break on legacy rows.
+func parseStoredTime(value string) time.Time {
+	if value == "" {
+		return time.Time{}
+	}
+	parsed, err := time.Parse(time.RFC3339Nano, value)
+	if err != nil {
+		parsed, err = time.Parse(time.RFC3339, value)
+		if err != nil {
+			return time.Time{}
+		}
+	}
+	return parsed
+}
+
+// SymbolPnL aggregates realized PnL per symbol.
+type SymbolPnL struct {
+	Symbol       string  `json:"symbol"`
+	RealizedPnL  float64 `json:"realized_pnl"`
+	Fee          float64 `json:"fee"`
+	ClosedTrades int     `json:"closed_trades"`
+}
+
+// ExecutionStats holds closed-trade performance metrics derived from fills.
+type ExecutionStats struct {
+	ClosedTrades     int         `json:"closed_trades"`
+	WinningTrades    int         `json:"winning_trades"`
+	LosingTrades     int         `json:"losing_trades"`
+	WinRate          float64     `json:"win_rate"`
+	TotalRealizedPnL float64     `json:"total_realized_pnl"`
+	TotalFee         float64     `json:"total_fee"`
+	GrossProfit      float64     `json:"gross_profit"`
+	GrossLoss        float64     `json:"gross_loss"`
+	ProfitFactor     float64     `json:"profit_factor"`
+	AvgWin           float64     `json:"avg_win"`
+	AvgLoss          float64     `json:"avg_loss"`
+	PnLBySymbol      []SymbolPnL `json:"pnl_by_symbol"`
+}
+
+// GetExecutionStats computes win rate / profit factor / PnL breakdown from
+// realized fills (fills with non-zero realized PnL are treated as closes).
+func (s *ExecutionStore) GetExecutionStats(traderID, exchangeID string) (*ExecutionStats, error) {
+	stats := &ExecutionStats{PnLBySymbol: []SymbolPnL{}}
+
+	// Per-symbol aggregation
+	rows, err := s.db.Query(`
+		SELECT symbol,
+			SUM(CASE WHEN realized_pnl != 0 THEN 1 ELSE 0 END) AS closed_trades,
+			SUM(realized_pnl) AS realized_pnl,
+			SUM(fee) AS fee
+		FROM exchange_fills
+		WHERE trader_id = ? AND exchange_id = ?
+		GROUP BY symbol
+		ORDER BY realized_pnl DESC
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to aggregate symbol pnl: %w", err)
+	}
+	defer rows.Close()
+
+	for rows.Next() {
+		var item SymbolPnL
+		if err := rows.Scan(&item.Symbol, &item.ClosedTrades, &item.RealizedPnL, &item.Fee); err != nil {
+			return nil, fmt.Errorf("failed to scan symbol pnl: %w", err)
+		}
+		stats.PnLBySymbol = append(stats.PnLBySymbol, item)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	// Per-close aggregation for win rate / profit factor
+	closeRows, err := s.db.Query(`
+		SELECT realized_pnl, fee
+		FROM exchange_fills
+		WHERE trader_id = ? AND exchange_id = ? AND realized_pnl != 0
+	`)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query realized fills: %w", err)
+	}
+	defer closeRows.Close()
+
+	for closeRows.Next() {
+		var pnl, fee float64
+		if err := closeRows.Scan(&pnl, &fee); err != nil {
+			return nil, fmt.Errorf("failed to scan realized fill: %w", err)
+		}
+		stats.ClosedTrades++
+		stats.TotalRealizedPnL += pnl
+		stats.TotalFee += fee
+		if pnl > 0 {
+			stats.WinningTrades++
+			stats.GrossProfit += pnl
+		} else {
+			stats.LosingTrades++
+			stats.GrossLoss += -pnl
+		}
+	}
+	if err := closeRows.Err(); err != nil {
+		return nil, err
+	}
+
+	if stats.ClosedTrades > 0 {
+		stats.WinRate = float64(stats.WinningTrades) / float64(stats.ClosedTrades) * 100
+	}
+	if stats.WinningTrades > 0 {
+		stats.AvgWin = stats.GrossProfit / float64(stats.WinningTrades)
+	}
+	if stats.LosingTrades > 0 {
+		stats.AvgLoss = stats.GrossLoss / float64(stats.LosingTrades)
+	}
+	if stats.GrossLoss > 0 {
+		stats.ProfitFactor = stats.GrossProfit / stats.GrossLoss
+	}
+	return stats, nil
 }

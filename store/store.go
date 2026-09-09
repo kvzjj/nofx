@@ -40,6 +40,7 @@ type Store struct {
 	strategy  *StrategyStore
 	paper     *PaperStore
 	equity    *EquityStore
+	notification *NotificationStore
 
 	// Encryption functions
 	encryptFunc func(string) string
@@ -163,6 +164,9 @@ func (s *Store) initTables() error {
 	}
 	if err := s.Equity().initTables(); err != nil {
 		return fmt.Errorf("failed to initialize equity tables: %w", err)
+	}
+	if err := s.Notification().InitTables(); err != nil {
+		return fmt.Errorf("failed to initialize notification tables: %w", err)
 	}
 	return nil
 }
@@ -306,6 +310,16 @@ func (s *Store) Equity() *EquityStore {
 		s.equity = &EquityStore{db: s.db}
 	}
 	return s.equity
+}
+
+// Notification gets notification storage
+func (s *Store) Notification() *NotificationStore {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.notification == nil {
+		s.notification = &NotificationStore{db: s.db}
+	}
+	return s.notification
 }
 
 // Close closes database connection

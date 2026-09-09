@@ -8,6 +8,7 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/notify"
 	"nofx/store"
 	"strconv"
 	"strings"
@@ -606,11 +607,25 @@ func (at *AutoTrader) runCycle() error {
 				record.ErrorMessage += fmt.Sprintf("; %s %s failed: %v", d.Symbol, d.Action, err)
 			}
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("❌ %s %s failed: %v", d.Symbol, d.Action, err))
+			// 通知渠道告警：决策执行失败
+			notify.NotifyGlobal(at.userID, notify.EventTradeFailed,
+				fmt.Sprintf("❌ Trade failed [%s]", at.name),
+				fmt.Sprintf("%s %s failed: %v", d.Symbol, d.Action, err))
 		} else {
 			// Passive decisions did not test the exchange and must not erase a
 			// previous execution failure in this or an earlier cycle.
 			if d.Action != "hold" && d.Action != "wait" {
 				at.recordExecutionSuccess()
+				// 通知渠道告警：开/平仓成功
+				event := notify.EventTradeOpened
+				eventTitle := "📈 Position opened"
+				if strings.HasPrefix(d.Action, "close") {
+					event = notify.EventTradeClosed
+					eventTitle = "📉 Position closed"
+				}
+				notify.NotifyGlobal(at.userID, event,
+					fmt.Sprintf("%s [%s]", eventTitle, at.name),
+					fmt.Sprintf("%s %s qty=%.6g lev=%d", d.Symbol, d.Action, actionRecord.Quantity, actionRecord.Leverage))
 			}
 			actionRecord.Success = true
 			record.ExecutionLog = append(record.ExecutionLog, fmt.Sprintf("✓ %s %s succeeded", d.Symbol, d.Action))
@@ -1447,6 +1462,11 @@ func (at *AutoTrader) GetAIModel() string {
 // GetExchange gets exchange
 func (at *AutoTrader) GetExchange() string {
 	return at.exchange
+}
+
+// GetExchangeID gets the exchange account UUID used for persisting execution data
+func (at *AutoTrader) GetExchangeID() string {
+	return at.exchangeID
 }
 
 // GetShowInCompetition returns whether trader should be shown in competition

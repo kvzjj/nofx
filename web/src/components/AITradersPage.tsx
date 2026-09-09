@@ -29,6 +29,8 @@ import {
   EyeOff,
   ExternalLink,
   RotateCcw,
+  RefreshCw,
+  Loader2,
 } from 'lucide-react'
 import { confirmToast } from '../lib/notify'
 import { toast } from 'sonner'
@@ -54,11 +56,14 @@ function getShortName(fullName: string): string {
 }
 
 // AI Provider configuration - default models and API links
-const AI_PROVIDER_CONFIG: Record<string, {
-  defaultModel: string
-  apiUrl: string
-  apiName: string
-}> = {
+const AI_PROVIDER_CONFIG: Record<
+  string,
+  {
+    defaultModel: string
+    apiUrl: string
+    apiName: string
+  }
+> = {
   deepseek: {
     defaultModel: 'deepseek-chat',
     apiUrl: 'https://platform.deepseek.com/api_keys',
@@ -101,12 +106,17 @@ interface AITradersPageProps {
 }
 
 // Helper function to get exchange display name from exchange ID (UUID)
-function getExchangeDisplayName(exchangeId: string | undefined, exchanges: Exchange[]): string {
+function getExchangeDisplayName(
+  exchangeId: string | undefined,
+  exchanges: Exchange[]
+): string {
   if (!exchangeId) return 'Unknown'
-  const exchange = exchanges.find(e => e.id === exchangeId)
+  const exchange = exchanges.find((e) => e.id === exchangeId)
   if (!exchange) return exchangeId.substring(0, 8).toUpperCase() + '...' // Show truncated UUID if not found
   const typeName = exchange.exchange_type?.toUpperCase() || exchange.name
-  return exchange.account_name ? `${typeName} - ${exchange.account_name}` : typeName
+  return exchange.account_name
+    ? `${typeName} - ${exchange.account_name}`
+    : typeName
 }
 
 export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
@@ -117,6 +127,22 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const [showEditModal, setShowEditModal] = useState(false)
   const [showModelModal, setShowModelModal] = useState(false)
   const [showExchangeModal, setShowExchangeModal] = useState(false)
+  // 批量选择与批量启停（声明在使用之前，依赖下方 useSWR 的 traders/mutateTraders）
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [batchRunning, setBatchRunning] = useState(false)
+
+  const toggleSelected = (traderId: string) => {
+    setSelectedIds((prev) => {
+      const next = new Set(prev)
+      if (next.has(traderId)) {
+        next.delete(traderId)
+      } else {
+        next.add(traderId)
+      }
+      return next
+    })
+  }
+
   const [editingModel, setEditingModel] = useState<string | null>(null)
   const [editingExchange, setEditingExchange] = useState<string | null>(null)
   const [editingTrader, setEditingTrader] = useState<any>(null)
@@ -125,11 +151,71 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const [supportedModels, setSupportedModels] = useState<AIModel[]>([])
   const [supportedExchanges, setSupportedExchanges] = useState<Exchange[]>([])
 
-  const { data: traders, mutate: mutateTraders, isLoading: isTradersLoading } = useSWR<TraderInfo[]>(
-    user && token ? 'traders' : null,
-    api.getTraders,
-    { refreshInterval: 5000 }
-  )
+  const {
+    data: traders,
+    mutate: mutateTraders,
+    isLoading: isTradersLoading,
+  } = useSWR<TraderInfo[]>(user && token ? 'traders' : null, api.getTraders, {
+    refreshInterval: 5000,
+  })
+
+  const allSelected =
+    !!traders && traders.length > 0 && selectedIds.size === traders.length
+
+  const toggleSelectAll = () => {
+    if (!traders) return
+    setSelectedIds(
+      allSelected ? new Set() : new Set(traders.map((tr) => tr.trader_id))
+    )
+  }
+
+  // 批量启动/停止选中 trader
+  const handleBatchToggle = async (start: boolean) => {
+    if (selectedIds.size === 0) return
+    const confirmed = await confirmToast(
+      language === 'zh'
+        ? start
+          ? `确定批量启动 ${selectedIds.size} 个交易员？`
+          : `确定批量停止 ${selectedIds.size} 个交易员？`
+        : start
+          ? `Start ${selectedIds.size} traders?`
+          : `Stop ${selectedIds.size} traders?`
+    )
+    if (!confirmed) return
+
+    setBatchRunning(true)
+    let success = 0
+    let failed = 0
+    for (const id of selectedIds) {
+      try {
+        if (start) {
+          await api.startTrader(id)
+        } else {
+          await api.stopTrader(id)
+        }
+        success++
+      } catch {
+        failed++
+      }
+    }
+    setBatchRunning(false)
+    setSelectedIds(new Set())
+
+    if (failed === 0) {
+      toast.success(
+        language === 'zh'
+          ? `已批量${start ? '启动' : '停止'} ${success} 个交易员`
+          : `${start ? 'Started' : 'Stopped'} ${success} traders`
+      )
+    } else {
+      toast.warning(
+        language === 'zh'
+          ? `批量操作完成：成功 ${success}，失败 ${failed}`
+          : `Batch done: ${success} succeeded, ${failed} failed`
+      )
+    }
+    await mutateTraders()
+  }
 
   // 加载AI模型和交易所配置
   useEffect(() => {
@@ -369,12 +455,15 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     if (!confirmed) return
     try {
       await toast.promise(api.resetPaperAccount(traderId), {
-        loading: language === 'zh' ? '正在重置模拟账户…' : 'Resetting paper account...',
-        success:
+        loading:
           language === 'zh'
-            ? '模拟账户已重置'
-            : 'Paper account reset',
-        error: language === 'zh' ? '重置模拟账户失败' : 'Failed to reset paper account',
+            ? '正在重置模拟账户…'
+            : 'Resetting paper account...',
+        success: language === 'zh' ? '模拟账户已重置' : 'Paper account reset',
+        error:
+          language === 'zh'
+            ? '重置模拟账户失败'
+            : 'Failed to reset paper account',
       })
       await mutateTraders()
     } catch (error) {
@@ -382,7 +471,33 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
     }
   }
 
-  const handleToggleCompetition = async (traderId: string, currentShowInCompetition: boolean) => {
+  // 同步交易所余额：把交易所真实权益写入 initial_balance，修正盈亏基准
+  const handleSyncBalance = async (traderId: string) => {
+    const confirmed = await confirmToast(
+      language === 'zh'
+        ? '将交易所当前权益同步为盈亏计算基准（initial_balance）？'
+        : 'Sync current exchange equity as the P&L baseline (initial_balance)?'
+    )
+    if (!confirmed) return
+    try {
+      await toast.promise(api.syncBalance(traderId), {
+        loading: language === 'zh' ? '正在同步余额…' : 'Syncing balance...',
+        success: (data) =>
+          language === 'zh'
+            ? `已同步：${data?.new_balance?.toFixed(2) ?? '--'} USDT`
+            : `Synced: ${data?.new_balance?.toFixed(2) ?? '--'} USDT`,
+        error: language === 'zh' ? '同步余额失败' : 'Failed to sync balance',
+      })
+      await mutateTraders()
+    } catch (error) {
+      console.error('Failed to sync balance:', error)
+    }
+  }
+
+  const handleToggleCompetition = async (
+    traderId: string,
+    currentShowInCompetition: boolean
+  ) => {
     try {
       const newValue = !currentShowInCompetition
       await toast.promise(api.toggleCompetition(traderId, newValue), {
@@ -605,9 +720,16 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
 
     try {
       await toast.promise(api.deleteExchange(exchangeId), {
-        loading: language === 'zh' ? '正在删除交易所账户…' : 'Deleting exchange account...',
-        success: language === 'zh' ? '交易所账户已删除' : 'Exchange account deleted',
-        error: language === 'zh' ? '删除交易所账户失败' : 'Failed to delete exchange account',
+        loading:
+          language === 'zh'
+            ? '正在删除交易所账户…'
+            : 'Deleting exchange account...',
+        success:
+          language === 'zh' ? '交易所账户已删除' : 'Exchange account deleted',
+        error:
+          language === 'zh'
+            ? '删除交易所账户失败'
+            : 'Failed to delete exchange account',
       })
 
       // 重新获取用户配置以确保数据同步
@@ -652,9 +774,16 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         }
 
         await toast.promise(api.updateExchangeConfigsEncrypted(request), {
-          loading: language === 'zh' ? '正在更新交易所配置…' : 'Updating exchange config...',
-          success: language === 'zh' ? '交易所配置已更新' : 'Exchange config updated',
-          error: language === 'zh' ? '更新交易所配置失败' : 'Failed to update exchange config',
+          loading:
+            language === 'zh'
+              ? '正在更新交易所配置…'
+              : 'Updating exchange config...',
+          success:
+            language === 'zh' ? '交易所配置已更新' : 'Exchange config updated',
+          error:
+            language === 'zh'
+              ? '更新交易所配置失败'
+              : 'Failed to update exchange config',
         })
       } else {
         // 创建新账户
@@ -668,9 +797,16 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         }
 
         await toast.promise(api.createExchangeEncrypted(createRequest), {
-          loading: language === 'zh' ? '正在创建交易所账户…' : 'Creating exchange account...',
-          success: language === 'zh' ? '交易所账户已创建' : 'Exchange account created',
-          error: language === 'zh' ? '创建交易所账户失败' : 'Failed to create exchange account',
+          loading:
+            language === 'zh'
+              ? '正在创建交易所账户…'
+              : 'Creating exchange account...',
+          success:
+            language === 'zh' ? '交易所账户已创建' : 'Exchange account created',
+          error:
+            language === 'zh'
+              ? '创建交易所账户失败'
+              : 'Failed to create exchange account',
         })
       }
 
@@ -836,7 +972,9 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                         {getShortName(model.name)}
                       </div>
                       <div className="text-xs" style={{ color: '#F0B90B' }}>
-                        {model.customModelName || AI_PROVIDER_CONFIG[model.provider]?.defaultModel || ''}
+                        {model.customModelName ||
+                          AI_PROVIDER_CONFIG[model.provider]?.defaultModel ||
+                          ''}
                       </div>
                       <div className="text-xs" style={{ color: '#848E9C' }}>
                         {inUse
@@ -895,15 +1033,22 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                 >
                   <div className="flex items-center gap-2 md:gap-3">
                     <div className="w-7 h-7 md:w-8 md:h-8 flex items-center justify-center flex-shrink-0">
-                      {getExchangeIcon(exchange.exchange_type || exchange.id, { width: 28, height: 28 })}
+                      {getExchangeIcon(exchange.exchange_type || exchange.id, {
+                        width: 28,
+                        height: 28,
+                      })}
                     </div>
                     <div className="min-w-0">
                       <div
                         className="font-semibold text-sm md:text-base truncate"
                         style={{ color: '#EAECEF' }}
                       >
-                        {exchange.exchange_type?.toUpperCase() || getShortName(exchange.name)}
-                        <span className="text-xs font-normal ml-1.5" style={{ color: '#F0B90B' }}>
+                        {exchange.exchange_type?.toUpperCase() ||
+                          getShortName(exchange.name)}
+                        <span
+                          className="text-xs font-normal ml-1.5"
+                          style={{ color: '#F0B90B' }}
+                        >
                           - {exchange.account_name || 'Default'}
                         </span>
                       </div>
@@ -979,21 +1124,91 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
           </div>
         ) : traders && traders.length > 0 ? (
           <div className="space-y-3 md:space-y-4">
+            {/* 批量操作工具栏 */}
+            <div
+              className="flex items-center justify-between gap-3 px-3 py-2 rounded flex-wrap"
+              style={{ background: '#181A20', border: '1px solid #2B3139' }}
+            >
+              <label
+                className="flex items-center gap-2 text-xs font-semibold cursor-pointer select-none"
+                style={{ color: '#848E9C' }}
+              >
+                <input
+                  type="checkbox"
+                  checked={allSelected}
+                  onChange={toggleSelectAll}
+                  className="w-4 h-4 accent-yellow-500"
+                />
+                {t('selectAll', language)}
+                {selectedIds.size > 0 && ` (${selectedIds.size})`}
+              </label>
+              <div className="flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={() => handleBatchToggle(true)}
+                  disabled={batchRunning || selectedIds.size === 0}
+                  className="px-3 py-1.5 rounded text-xs font-bold transition-all hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{
+                    background: 'rgba(14, 203, 129, 0.1)',
+                    color: '#0ECB81',
+                  }}
+                >
+                  {batchRunning ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    t('batchStart', language)
+                  )}
+                </button>
+                <button
+                  type="button"
+                  onClick={() => handleBatchToggle(false)}
+                  disabled={batchRunning || selectedIds.size === 0}
+                  className="px-3 py-1.5 rounded text-xs font-bold transition-all hover:scale-105 disabled:opacity-40 disabled:cursor-not-allowed"
+                  style={{
+                    background: 'rgba(246, 70, 93, 0.1)',
+                    color: '#F6465D',
+                  }}
+                >
+                  {batchRunning ? (
+                    <Loader2 className="w-3.5 h-3.5 animate-spin" />
+                  ) : (
+                    t('batchStop', language)
+                  )}
+                </button>
+              </div>
+            </div>
+
             {traders.map((trader) => (
               <div
                 key={trader.trader_id}
                 className="flex flex-col md:flex-row md:items-center justify-between p-3 md:p-4 rounded transition-all hover:translate-y-[-1px] gap-3 md:gap-4"
-                style={{ background: '#0B0E11', border: '1px solid #2B3139' }}
+                style={{
+                  background: '#0B0E11',
+                  border: `1px solid ${selectedIds.has(trader.trader_id) ? '#F0B90B' : '#2B3139'}`,
+                }}
               >
                 <div className="flex items-center gap-3 md:gap-4">
+                  {/* 批量选择复选框 */}
+                  <input
+                    type="checkbox"
+                    checked={selectedIds.has(trader.trader_id)}
+                    onChange={() => toggleSelected(trader.trader_id)}
+                    className="w-4 h-4 accent-yellow-500 flex-shrink-0 cursor-pointer"
+                  />
                   <div className="flex-shrink-0">
                     <PunkAvatar
-                      seed={getTraderAvatar(trader.trader_id, trader.trader_name)}
+                      seed={getTraderAvatar(
+                        trader.trader_id,
+                        trader.trader_name
+                      )}
                       size={48}
                       className="rounded-lg hidden md:block"
                     />
                     <PunkAvatar
-                      seed={getTraderAvatar(trader.trader_id, trader.trader_name)}
+                      seed={getTraderAvatar(
+                        trader.trader_id,
+                        trader.trader_name
+                      )}
                       size={40}
                       className="rounded-lg md:hidden"
                     />
@@ -1016,7 +1231,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                       {getModelDisplayName(
                         trader.ai_model.split('_').pop() || trader.ai_model
                       )}{' '}
-                      Model • {getExchangeDisplayName(trader.exchange_id, allExchanges)}
+                      Model •{' '}
+                      {getExchangeDisplayName(trader.exchange_id, allExchanges)}
                     </div>
                   </div>
                 </div>
@@ -1112,7 +1328,12 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                     </button>
 
                     <button
-                      onClick={() => handleToggleCompetition(trader.trader_id, trader.show_in_competition ?? true)}
+                      onClick={() =>
+                        handleToggleCompetition(
+                          trader.trader_id,
+                          trader.show_in_competition ?? true
+                        )
+                      }
                       className="px-2 md:px-3 py-1.5 md:py-2 rounded text-xs md:text-sm font-semibold transition-all hover:scale-105 whitespace-nowrap flex items-center gap-1"
                       style={
                         trader.show_in_competition !== false
@@ -1125,7 +1346,11 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                               color: '#848E9C',
                             }
                       }
-                      title={trader.show_in_competition !== false ? '在竞技场显示' : '在竞技场隐藏'}
+                      title={
+                        trader.show_in_competition !== false
+                          ? '在竞技场显示'
+                          : '在竞技场隐藏'
+                      }
                     >
                       {trader.show_in_competition !== false ? (
                         <Eye className="w-3 h-3 md:w-4 md:h-4" />
@@ -1159,6 +1384,33 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
                         >
                           <RotateCcw className="w-3 h-3 md:w-4 md:h-4" />
                           {language === 'zh' ? '重置' : 'Reset'}
+                        </button>
+                      )
+                    })()}
+
+                    {(() => {
+                      // 真实交易所账户显示余额同步按钮（paper 无需同步）
+                      const exchange = allExchanges?.find(
+                        (e) => e.id === trader.exchange_id
+                      )
+                      if (exchange?.exchange_type?.toLowerCase() === 'paper')
+                        return null
+                      return (
+                        <button
+                          onClick={() => handleSyncBalance(trader.trader_id)}
+                          className="px-2 md:px-3 py-1.5 md:py-2 rounded text-xs md:text-sm font-semibold transition-all hover:scale-105 whitespace-nowrap flex items-center gap-1"
+                          style={{
+                            background: 'rgba(240, 185, 11, 0.1)',
+                            color: '#F0B90B',
+                          }}
+                          title={
+                            language === 'zh'
+                              ? '同步交易所余额为盈亏基准'
+                              : 'Sync exchange balance as P&L baseline'
+                          }
+                        >
+                          <RefreshCw className="w-3 h-3 md:w-4 md:h-4" />
+                          {language === 'zh' ? '同步余额' : 'Sync'}
                         </button>
                       )
                     })()}
@@ -1425,9 +1677,18 @@ function ModelConfigModal({
                 </div>
                 {/* Default model info and API link */}
                 {AI_PROVIDER_CONFIG[selectedModel.provider] && (
-                  <div className="mt-3 pt-3" style={{ borderTop: '1px solid #2B3139' }}>
+                  <div
+                    className="mt-3 pt-3"
+                    style={{ borderTop: '1px solid #2B3139' }}
+                  >
                     <div className="text-xs mb-2" style={{ color: '#848E9C' }}>
-                      {t('defaultModel', language)}: <span style={{ color: '#F0B90B' }}>{AI_PROVIDER_CONFIG[selectedModel.provider].defaultModel}</span>
+                      {t('defaultModel', language)}:{' '}
+                      <span style={{ color: '#F0B90B' }}>
+                        {
+                          AI_PROVIDER_CONFIG[selectedModel.provider]
+                            .defaultModel
+                        }
+                      </span>
                     </div>
                     <a
                       href={AI_PROVIDER_CONFIG[selectedModel.provider].apiUrl}
@@ -1437,10 +1698,17 @@ function ModelConfigModal({
                       style={{ color: '#F0B90B' }}
                     >
                       <ExternalLink className="w-3 h-3" />
-                      {t('applyApiKey', language)} → {AI_PROVIDER_CONFIG[selectedModel.provider].apiName}
+                      {t('applyApiKey', language)} →{' '}
+                      {AI_PROVIDER_CONFIG[selectedModel.provider].apiName}
                     </a>
                     {selectedModel.provider === 'kimi' && (
-                      <div className="mt-2 text-xs p-2 rounded" style={{ background: 'rgba(246, 70, 93, 0.1)', color: '#F6465D' }}>
+                      <div
+                        className="mt-2 text-xs p-2 rounded"
+                        style={{
+                          background: 'rgba(246, 70, 93, 0.1)',
+                          color: '#F6465D',
+                        }}
+                      >
                         ⚠️ {t('kimiApiNote', language)}
                       </div>
                     )}

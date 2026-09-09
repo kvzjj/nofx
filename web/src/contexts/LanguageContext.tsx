@@ -11,10 +11,15 @@ const LanguageContext = createContext<LanguageContextType | undefined>(
 )
 
 export function LanguageProvider({ children }: { children: ReactNode }) {
-  // Initialize language from localStorage or default to English
+  // 初始化语言：优先用户已保存的选择；否则自动检测浏览器语言（中文环境默认中文，其余默认英文）
   const [language, setLanguage] = useState<Language>(() => {
     const saved = localStorage.getItem('language')
-    return saved === 'en' || saved === 'zh' ? saved : 'en'
+    if (saved === 'en' || saved === 'zh') return saved
+    const browserLang =
+      typeof navigator !== 'undefined'
+        ? (navigator.language || '').toLowerCase()
+        : ''
+    return browserLang.startsWith('zh') ? 'zh' : 'en'
   })
 
   // Save language to localStorage whenever it changes

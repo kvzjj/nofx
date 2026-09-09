@@ -14,6 +14,7 @@ import (
 	"nofx/manager"
 	"nofx/store"
 	"nofx/trader"
+	"strconv"
 	"strings"
 	"time"
 
@@ -134,6 +135,7 @@ func (s *Server) setupRoutes() {
 			protected.POST("/traders/:id/sync-balance", s.handleSyncBalance)
 			protected.POST("/traders/:id/reset-paper", s.handleResetPaperAccount)
 			protected.POST("/traders/:id/close-position", s.handleClosePosition)
+			protected.POST("/traders/:id/manual-order", s.handleManualOrder)
 			protected.PUT("/traders/:id/competition", s.handleToggleCompetition)
 
 			// SSE 实时推送（账户+持仓快照），EventSource 无法携带 Authorization 头，
@@ -167,9 +169,34 @@ func (s *Server) setupRoutes() {
 			protected.GET("/status", s.handleStatus)
 			protected.GET("/account", s.handleAccount)
 			protected.GET("/positions", s.handlePositions)
+			protected.GET("/orders", s.handleOrderHistory)
+			protected.GET("/fills", s.handleFillHistory)
 			protected.GET("/decisions", s.handleDecisions)
 			protected.GET("/decisions/latest", s.handleLatestDecisions)
 			protected.GET("/statistics", s.handleStatistics)
+			protected.GET("/performance-metrics", s.handlePerformanceMetrics)
+
+			// Notification channels (Telegram / Webhook / Email)
+			protected.GET("/notifications/channels", s.handleListNotificationChannels)
+			protected.POST("/notifications/channels", s.handleCreateNotificationChannel)
+			protected.PUT("/notifications/channels/:id", s.handleUpdateNotificationChannel)
+			protected.DELETE("/notifications/channels/:id", s.handleDeleteNotificationChannel)
+			protected.POST("/notifications/channels/:id/test", s.handleTestNotificationChannel)
+			protected.GET("/notifications/logs", s.handleNotificationLogs)
+
+			// User settings (profile / password / 2FA)
+			protected.GET("/user/profile", s.handleGetUserProfile)
+			protected.PUT("/user/password", s.handleChangePassword)
+			protected.POST("/user/2fa/reset", s.handleReset2FA)
+			protected.POST("/user/2fa/confirm", s.handleConfirm2FA)
+
+			// Admin panel (bootstrap admin account only)
+			admin := protected.Group("/admin", s.adminMiddleware())
+			{
+				admin.GET("/users", s.handleAdminListUsers)
+				admin.GET("/system-status", s.handleAdminSystemStatus)
+				admin.GET("/recent-decisions", s.handleAdminRecentDecisions)
+			}
 		}
 	}
 }
@@ -1876,6 +1903,128 @@ func (s *Server) handleStatistics(c *gin.Context) {
 	}
 
 	c.JSON(http.StatusOK, stats)
+}
+
+// paginationParams parses limit/offset query parameters with sane bounds.
+func paginationParams(c *gin.Context) (limit, offset int) {
+	limit = 50
+	if v, err := strconv.Atoi(c.Query("limit")); err == nil && v > 0 {
+		limit = v
+	}
+	if limit > 200 {
+		limit = 200
+	}
+	offset = 0
+	if v, err := strconv.Atoi(c.Query("offset")); err == nil && v > 0 {
+		offset = v
+	}
+	return limit, offset
+}
+
+// handleOrderHistory returns persisted trade orders (newest first) for a trader
+func (s *Server) handleOrderHistory(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	limit, offset := paginationParams(c)
+	execStore := s.store.Execution()
+	orders, err := execStore.ListOrderHistory(trader.GetID(), trader.GetExchangeID(), limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to get order history: %v", err),
+		})
+		return
+	}
+	total, err := execStore.CountOrders(trader.GetID(), trader.GetExchangeID())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to count orders: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"orders": orders, "total": total, "limit": limit, "offset": offset})
+}
+
+// handleFillHistory returns persisted exchange fills (newest first) for a trader
+func (s *Server) handleFillHistory(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	limit, offset := paginationParams(c)
+	execStore := s.store.Execution()
+	fills, err := execStore.ListFillHistory(trader.GetID(), trader.GetExchangeID(), limit, offset)
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to get fill history: %v", err),
+		})
+		return
+	}
+	total, err := execStore.CountFills(trader.GetID(), trader.GetExchangeID())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to count fills: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{"fills": fills, "total": total, "limit": limit, "offset": offset})
+}
+
+// handlePerformanceMetrics returns risk & performance analytics for a trader:
+// max drawdown (from equity snapshots) plus closed-trade stats (win rate,
+// profit factor, per-symbol PnL) derived from realized fills.
+func (s *Server) handlePerformanceMetrics(c *gin.Context) {
+	_, traderID, err := s.getTraderFromQuery(c)
+	if err != nil {
+		c.JSON(http.StatusBadRequest, gin.H{"error": err.Error()})
+		return
+	}
+
+	trader, err := s.traderManager.GetTrader(traderID)
+	if err != nil {
+		c.JSON(http.StatusNotFound, gin.H{"error": err.Error()})
+		return
+	}
+
+	execStats, err := s.store.Execution().GetExecutionStats(trader.GetID(), trader.GetExchangeID())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to get execution stats: %v", err),
+		})
+		return
+	}
+
+	drawdown, err := s.store.Equity().GetMaxDrawdown(trader.GetID())
+	if err != nil {
+		c.JSON(http.StatusInternalServerError, gin.H{
+			"error": fmt.Sprintf("Failed to get drawdown stats: %v", err),
+		})
+		return
+	}
+
+	c.JSON(http.StatusOK, gin.H{
+		"execution": execStats,
+		"drawdown":  drawdown,
+	})
 }
 
 // handleCompetition Competition overview (compare all traders)

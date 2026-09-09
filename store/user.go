@@ -126,6 +126,31 @@ func (s *UserStore) CountVerified() (int, error) {
 }
 
 // GetAllIDs gets all user IDs
+// ListAll returns all users (without secrets) for the admin panel.
+func (s *UserStore) ListAll() ([]*User, error) {
+	rows, err := s.db.Query(`
+		SELECT id, email, password_hash, otp_secret, otp_verified, created_at, updated_at
+		FROM users ORDER BY created_at ASC
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var users []*User
+	for rows.Next() {
+		u := &User{}
+		var createdAt, updatedAt string
+		if err := rows.Scan(&u.ID, &u.Email, &u.PasswordHash, &u.OTPSecret, &u.OTPVerified, &createdAt, &updatedAt); err != nil {
+			continue
+		}
+		u.CreatedAt, _ = time.Parse(time.RFC3339, createdAt)
+		u.UpdatedAt, _ = time.Parse(time.RFC3339, updatedAt)
+		users = append(users, u)
+	}
+	return users, rows.Err()
+}
+
 func (s *UserStore) GetAllIDs() ([]string, error) {
 	rows, err := s.db.Query(`SELECT id FROM users ORDER BY id`)
 	if err != nil {
@@ -147,6 +172,12 @@ func (s *UserStore) GetAllIDs() ([]string, error) {
 // UpdateOTPVerified updates OTP verification status
 func (s *UserStore) UpdateOTPVerified(userID string, verified bool) error {
 	_, err := s.db.Exec(`UPDATE users SET otp_verified = ? WHERE id = ?`, verified, userID)
+	return err
+}
+
+// UpdateOTPSecret rotates the TOTP secret (2FA reset).
+func (s *UserStore) UpdateOTPSecret(userID, secret string, verified bool) error {
+	_, err := s.db.Exec(`UPDATE users SET otp_secret = ?, otp_verified = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`, secret, verified, userID)
 	return err
 }
 

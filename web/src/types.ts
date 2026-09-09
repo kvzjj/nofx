@@ -84,6 +84,157 @@ export interface Statistics {
   total_close_positions: number
 }
 
+// 历史订单（后端 store.TradeOrder + 时间戳）
+export interface TradeOrderRecord {
+  trader_id: string
+  exchange_id: string
+  exchange_type: string
+  order_id: string
+  symbol: string
+  position_side: string
+  action: string
+  requested_qty: number
+  executed_qty: number
+  avg_price: number
+  fee: number
+  status: string
+  last_error: string
+  leverage: number
+  stop_loss: number
+  take_profit: number
+  protected_qty: number
+  protection_status: string
+  created_at: string
+  updated_at: string
+}
+
+export interface OrderHistoryResponse {
+  orders: TradeOrderRecord[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// 成交记录（后端 store.ExchangeFill）
+export interface ExchangeFillRecord {
+  trade_id: string
+  order_id: string
+  symbol: string
+  position_side: string
+  side: string
+  quantity: number
+  price: number
+  fee: number
+  realized_pnl: number
+  executed_at: string
+}
+
+export interface FillHistoryResponse {
+  fills: ExchangeFillRecord[]
+  total: number
+  limit: number
+  offset: number
+}
+
+// 绩效指标（后端 /performance-metrics）
+export interface SymbolPnL {
+  symbol: string
+  realized_pnl: number
+  fee: number
+  closed_trades: number
+}
+
+export interface ExecutionStats {
+  closed_trades: number
+  winning_trades: number
+  losing_trades: number
+  win_rate: number
+  total_realized_pnl: number
+  total_fee: number
+  gross_profit: number
+  gross_loss: number
+  profit_factor: number
+  avg_win: number
+  avg_loss: number
+  pnl_by_symbol: SymbolPnL[]
+}
+
+export interface DrawdownStats {
+  max_drawdown_abs: number
+  max_drawdown_pct: number
+  peak_equity: number
+  trough_equity: number
+}
+
+export interface PerformanceMetrics {
+  execution: ExecutionStats
+  drawdown: DrawdownStats
+}
+
+// 通知渠道与发送日志（后端 /notifications/*）
+export interface NotificationChannel {
+  id: string
+  name: string
+  type: 'telegram' | 'webhook' | 'email'
+  enabled: boolean
+  config: Record<string, string>
+  created_at: string
+  updated_at: string
+}
+
+export interface NotificationLog {
+  id: number
+  channel_id: string
+  channel_name: string
+  channel_type: string
+  event: string
+  title: string
+  message: string
+  success: boolean
+  error?: string
+  created_at: string
+}
+
+// 用户资料（后端 /user/profile）
+export interface UserProfile {
+  user_id: string
+  email: string
+  otp_verified: boolean
+  created_at: string
+}
+
+// 管理后台（后端 /admin/*）
+export interface AdminUser {
+  user_id: string
+  email: string
+  otp_verified: boolean
+  created_at: string
+  trader_count: number
+  running_count: number
+}
+
+export interface AdminSystemStatus {
+  users_total: number
+  users_verified: number
+  traders_total: number
+  traders_running: number
+  goroutines: number
+  heap_alloc_mb: number
+  sys_mem_mb: number
+  db_size_mb: number
+  cpu_count: number
+  go_version: string
+  server_time: string
+}
+
+export interface AdminDecisionFeedItem {
+  trader_id: string
+  success: boolean
+  error?: string
+  timestamp: string
+  cycle_number: number
+}
+
 // AI Trading相关类型
 export interface TraderInfo {
   trader_id: string
@@ -111,10 +262,10 @@ export interface AIModel {
 }
 
 export interface Exchange {
-  id: string                     // UUID (empty for supported exchange templates)
-  exchange_type: string          // "binance"
-  account_name: string           // User-defined account name
-  name: string                   // Display name
+  id: string // UUID (empty for supported exchange templates)
+  exchange_type: string // "binance"
+  account_name: string // User-defined account name
+  name: string // Display name
   type: 'cex' | 'dex' | 'sim'
   enabled: boolean
   apiKey?: string
@@ -123,8 +274,8 @@ export interface Exchange {
 }
 
 export interface CreateExchangeRequest {
-  exchange_type: string          // "binance"
-  account_name: string           // User-defined account name
+  exchange_type: string // "binance"
+  account_name: string // User-defined account name
   enabled: boolean
   api_key?: string
   secret_key?: string
@@ -198,10 +349,10 @@ export interface TraderConfigData {
   trader_name: string
   ai_model: string
   exchange_id: string
-  strategy_id?: string  // 策略ID
-  strategy_name?: string  // 策略名称
+  strategy_id?: string // 策略ID
+  strategy_name?: string // 策略名称
   is_cross_margin: boolean
-  show_in_competition: boolean  // 是否在竞技场显示
+  show_in_competition: boolean // 是否在竞技场显示
   scan_interval_minutes: number
   initial_balance: number
   is_running: boolean
@@ -218,244 +369,244 @@ export interface TraderConfigData {
 
 // Backtest types
 export interface BacktestRunSummary {
-  symbol_count: number;
-  decision_tf: string;
-  processed_bars: number;
-  progress_pct: number;
-  equity_last: number;
-  max_drawdown_pct: number;
-  liquidated: boolean;
-  liquidation_note?: string;
+  symbol_count: number
+  decision_tf: string
+  processed_bars: number
+  progress_pct: number
+  equity_last: number
+  max_drawdown_pct: number
+  liquidated: boolean
+  liquidation_note?: string
 }
 
 export interface BacktestRunMetadata {
-  run_id: string;
-  label?: string;
-  user_id?: string;
-  last_error?: string;
-  version: number;
-  state: string;
-  created_at: string;
-  updated_at: string;
-  summary: BacktestRunSummary;
+  run_id: string
+  label?: string
+  user_id?: string
+  last_error?: string
+  version: number
+  state: string
+  created_at: string
+  updated_at: string
+  summary: BacktestRunSummary
 }
 
 export interface BacktestRunsResponse {
-  total: number;
-  items: BacktestRunMetadata[];
+  total: number
+  items: BacktestRunMetadata[]
 }
 
 export interface BacktestStatusPayload {
-  run_id: string;
-  state: string;
-  progress_pct: number;
-  processed_bars: number;
-  current_time: number;
-  decision_cycle: number;
-  equity: number;
-  unrealized_pnl: number;
-  realized_pnl: number;
-  note?: string;
-  last_error?: string;
-  last_updated_iso: string;
+  run_id: string
+  state: string
+  progress_pct: number
+  processed_bars: number
+  current_time: number
+  decision_cycle: number
+  equity: number
+  unrealized_pnl: number
+  realized_pnl: number
+  note?: string
+  last_error?: string
+  last_updated_iso: string
 }
 
 export interface BacktestEquityPoint {
-  ts: number;
-  equity: number;
-  available: number;
-  pnl: number;
-  pnl_pct: number;
-  dd_pct: number;
-  cycle: number;
+  ts: number
+  equity: number
+  available: number
+  pnl: number
+  pnl_pct: number
+  dd_pct: number
+  cycle: number
 }
 
 export interface BacktestTradeEvent {
-  ts: number;
-  symbol: string;
-  action: string;
-  side?: string;
-  qty: number;
-  price: number;
-  fee: number;
-  slippage: number;
-  order_value: number;
-  realized_pnl: number;
-  leverage?: number;
-  cycle: number;
-  position_after: number;
-  liquidation: boolean;
-  note?: string;
+  ts: number
+  symbol: string
+  action: string
+  side?: string
+  qty: number
+  price: number
+  fee: number
+  slippage: number
+  order_value: number
+  realized_pnl: number
+  leverage?: number
+  cycle: number
+  position_after: number
+  liquidation: boolean
+  note?: string
 }
 
 export interface BacktestMetrics {
-  total_return_pct: number;
-  max_drawdown_pct: number;
-  sharpe_ratio: number;
-  profit_factor: number;
-  win_rate: number;
-  trades: number;
-  avg_win: number;
-  avg_loss: number;
-  best_symbol: string;
-  worst_symbol: string;
-  liquidated: boolean;
+  total_return_pct: number
+  max_drawdown_pct: number
+  sharpe_ratio: number
+  profit_factor: number
+  win_rate: number
+  trades: number
+  avg_win: number
+  avg_loss: number
+  best_symbol: string
+  worst_symbol: string
+  liquidated: boolean
   symbol_stats?: Record<
     string,
     {
-      total_trades: number;
-      winning_trades: number;
-      losing_trades: number;
-      total_pnl: number;
-      avg_pnl: number;
-      win_rate: number;
+      total_trades: number
+      winning_trades: number
+      losing_trades: number
+      total_pnl: number
+      avg_pnl: number
+      win_rate: number
     }
-  >;
+  >
 }
 
 export interface BacktestStartConfig {
-  run_id?: string;
-  ai_model_id?: string;
-  symbols: string[];
-  timeframes: string[];
-  decision_timeframe: string;
-  decision_cadence_nbars: number;
-  start_ts: number;
-  end_ts: number;
-  initial_balance: number;
-  fee_bps: number;
-  slippage_bps: number;
-  fill_policy: string;
-  prompt_variant?: string;
-  prompt_template?: string;
-  custom_prompt?: string;
-  override_prompt?: boolean;
-  cache_ai?: boolean;
-  replay_only?: boolean;
-  checkpoint_interval_bars?: number;
-  checkpoint_interval_seconds?: number;
-  replay_decision_dir?: string;
-  shared_ai_cache_path?: string;
+  run_id?: string
+  ai_model_id?: string
+  symbols: string[]
+  timeframes: string[]
+  decision_timeframe: string
+  decision_cadence_nbars: number
+  start_ts: number
+  end_ts: number
+  initial_balance: number
+  fee_bps: number
+  slippage_bps: number
+  fill_policy: string
+  prompt_variant?: string
+  prompt_template?: string
+  custom_prompt?: string
+  override_prompt?: boolean
+  cache_ai?: boolean
+  replay_only?: boolean
+  checkpoint_interval_bars?: number
+  checkpoint_interval_seconds?: number
+  replay_decision_dir?: string
+  shared_ai_cache_path?: string
   ai?: {
-    provider?: string;
-    model?: string;
-    key?: string;
-    secret_key?: string;
-    base_url?: string;
-  };
+    provider?: string
+    model?: string
+    key?: string
+    secret_key?: string
+    base_url?: string
+  }
   leverage?: {
-    btc_eth_leverage?: number;
-    altcoin_leverage?: number;
-  };
+    btc_eth_leverage?: number
+    altcoin_leverage?: number
+  }
 }
 
 // Strategy Studio Types
 export interface Strategy {
-  id: string;
-  name: string;
-  description: string;
-  is_active: boolean;
-  is_default: boolean;
-  config: StrategyConfig;
-  created_at: string;
-  updated_at: string;
+  id: string
+  name: string
+  description: string
+  is_active: boolean
+  is_default: boolean
+  config: StrategyConfig
+  created_at: string
+  updated_at: string
 }
 
 export interface PromptSectionsConfig {
-  role_definition?: string;
-  trading_frequency?: string;
-  entry_standards?: string;
-  decision_process?: string;
+  role_definition?: string
+  trading_frequency?: string
+  entry_standards?: string
+  decision_process?: string
 }
 
 export interface StrategyConfig {
-  coin_source: CoinSourceConfig;
-  indicators: IndicatorConfig;
-  custom_prompt?: string;
-  risk_control: RiskControlConfig;
-  prompt_sections?: PromptSectionsConfig;
+  coin_source: CoinSourceConfig
+  indicators: IndicatorConfig
+  custom_prompt?: string
+  risk_control: RiskControlConfig
+  prompt_sections?: PromptSectionsConfig
 }
 
 export interface CoinSourceConfig {
-  source_type: 'static';
-  static_coins?: string[];
+  source_type: 'static'
+  static_coins?: string[]
 }
 
 export interface IndicatorConfig {
-  klines: KlineConfig;
+  klines: KlineConfig
   // Raw OHLCV kline data - required for AI analysis
-  enable_raw_klines: boolean;
+  enable_raw_klines: boolean
   // Technical indicators (optional)
-  enable_ema: boolean;
-  enable_macd: boolean;
-  enable_rsi: boolean;
-  enable_atr: boolean;
-  enable_volume: boolean;
-  enable_oi: boolean;
-  enable_funding_rate: boolean;
-  ema_periods?: number[];
-  rsi_periods?: number[];
-  atr_periods?: number[];
-  external_data_sources?: ExternalDataSource[];
+  enable_ema: boolean
+  enable_macd: boolean
+  enable_rsi: boolean
+  enable_atr: boolean
+  enable_volume: boolean
+  enable_oi: boolean
+  enable_funding_rate: boolean
+  ema_periods?: number[]
+  rsi_periods?: number[]
+  atr_periods?: number[]
+  external_data_sources?: ExternalDataSource[]
   // 量化数据源（资金流向、持仓变化、价格变化）
-  enable_quant_data?: boolean;
-  quant_data_api_url?: string;
-  enable_quant_oi?: boolean;
-  enable_quant_netflow?: boolean;
+  enable_quant_data?: boolean
+  quant_data_api_url?: string
+  enable_quant_oi?: boolean
+  enable_quant_netflow?: boolean
   // OI 排行数据（市场持仓量增减排行）
-  enable_oi_ranking?: boolean;
-  oi_ranking_api_url?: string;
-  oi_ranking_duration?: string;  // "1h", "4h", "24h"
-  oi_ranking_limit?: number;
+  enable_oi_ranking?: boolean
+  oi_ranking_api_url?: string
+  oi_ranking_duration?: string // "1h", "4h", "24h"
+  oi_ranking_limit?: number
 }
 
 export interface KlineConfig {
-  primary_timeframe: string;
-  primary_count: number;
-  longer_timeframe?: string;
-  longer_count?: number;
-  enable_multi_timeframe: boolean;
+  primary_timeframe: string
+  primary_count: number
+  longer_timeframe?: string
+  longer_count?: number
+  enable_multi_timeframe: boolean
   // 新增：支持选择多个时间周期
-  selected_timeframes?: string[];
+  selected_timeframes?: string[]
 }
 
 export interface ExternalDataSource {
-  name: string;
-  type: 'api' | 'webhook';
-  url: string;
-  method: string;
-  headers?: Record<string, string>;
-  data_path?: string;
-  refresh_secs?: number;
+  name: string
+  type: 'api' | 'webhook'
+  url: string
+  method: string
+  headers?: Record<string, string>
+  data_path?: string
+  refresh_secs?: number
 }
 
 export interface RiskControlConfig {
   // Max number of coins held simultaneously (CODE ENFORCED)
-  max_positions: number;
+  max_positions: number
 
   // Trading Leverage - exchange leverage for opening positions (AI guided)
-  btc_eth_max_leverage: number;    // BTC/ETH max exchange leverage
-  altcoin_max_leverage: number;    // Altcoin max exchange leverage
+  btc_eth_max_leverage: number // BTC/ETH max exchange leverage
+  altcoin_max_leverage: number // Altcoin max exchange leverage
 
-  max_position_size: number;       // Max notional value of one opening order
-  max_total_position_size: number; // Max total open-position notional value
+  max_position_size: number // Max notional value of one opening order
+  max_total_position_size: number // Max total open-position notional value
 
   // Risk Parameters
-  min_position_size: number;       // Min position size in USDT (CODE ENFORCED)
-  min_risk_reward_ratio: number;   // Min take_profit / stop_loss ratio (AI guided)
-  max_daily_loss_pct?: number;     // Account daily mark-to-market loss circuit breaker
-  max_drawdown_pct?: number;       // Equity high-water drawdown circuit breaker
-  max_margin_usage_pct?: number;   // Projected account margin usage ceiling
-  min_liquidation_distance_pct?: number; // Minimum mark-to-liquidation distance
-  max_consecutive_failures?: number; // Consecutive execution failure circuit breaker
-  max_market_move_pct?: number;    // 1h/4h abnormal move circuit breaker
-  stop_trading_minutes?: number;   // Circuit breaker pause duration
-  order_type?: 'market' | 'limit'; // Opening order type; close orders remain market
-  limit_price_offset_pct?: number; // Limit order offset from current price in percent
-  pending_order_timeout_sec?: number; // How long a resting limit entry is monitored before cancel
-  pending_order_poll_sec?: number; // Status polling interval for pending limit entries
+  min_position_size: number // Min position size in USDT (CODE ENFORCED)
+  min_risk_reward_ratio: number // Min take_profit / stop_loss ratio (AI guided)
+  max_daily_loss_pct?: number // Account daily mark-to-market loss circuit breaker
+  max_drawdown_pct?: number // Equity high-water drawdown circuit breaker
+  max_margin_usage_pct?: number // Projected account margin usage ceiling
+  min_liquidation_distance_pct?: number // Minimum mark-to-liquidation distance
+  max_consecutive_failures?: number // Consecutive execution failure circuit breaker
+  max_market_move_pct?: number // 1h/4h abnormal move circuit breaker
+  stop_trading_minutes?: number // Circuit breaker pause duration
+  order_type?: 'market' | 'limit' // Opening order type; close orders remain market
+  limit_price_offset_pct?: number // Limit order offset from current price in percent
+  pending_order_timeout_sec?: number // How long a resting limit entry is monitored before cancel
+  pending_order_poll_sec?: number // Status polling interval for pending limit entries
   // Trailing profit protection (backend-enforced, once per minute)
-  enable_trailing_profit_exit?: boolean; // Default true; explicitly false disables
-  trailing_profit_trigger_pct?: number;  // Arm once leveraged unrealized profit ≥ this %
-  trailing_profit_giveback_pct?: number;  // Close when profit retraces this % from peak
+  enable_trailing_profit_exit?: boolean // Default true; explicitly false disables
+  trailing_profit_trigger_pct?: number // Arm once leveraged unrealized profit ≥ this %
+  trailing_profit_giveback_pct?: number // Close when profit retraces this % from peak
 }

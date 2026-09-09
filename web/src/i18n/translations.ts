@@ -73,6 +73,135 @@ export const translations = {
     shortPosition: 'SHORT',
     liveExposure: 'Live exposure',
 
+    // Order & Fill History
+    executionHistory: 'Execution history',
+    orderHistory: 'Order History',
+    ordersTab: 'Orders',
+    fillsTab: 'Fills',
+    recordsUnit: 'records',
+    timeCol: 'Time',
+    priceCol: 'Price',
+    feeCol: 'Fee',
+    statusCol: 'Status',
+    realizedPnL: 'Realized P&L',
+    noOrdersYet: 'No Orders Yet',
+    noOrdersDesc: 'Order records will appear here after the trader executes',
+    noFillsYet: 'No Fills Yet',
+    noFillsDesc: 'Exchange fills will appear here after trades complete',
+    protectionActive: 'Stop-loss / take-profit protection active',
+
+    // Performance Metrics
+    riskAnalytics: 'Risk & analytics',
+    performanceMetrics: 'Performance Metrics',
+    closedWinRate: 'Closed Win Rate',
+    profitFactor: 'Profit Factor',
+    grossProfit: 'Gross profit',
+    grossLoss: 'Gross loss',
+    avgWinLabel: 'Avg Win',
+    avgLossLabel: 'Avg Loss',
+    pnlBySymbol: 'Realized P&L by Symbol',
+
+    // Export
+    exportCsv: 'Export CSV',
+    exportPositions: 'Export current positions as CSV',
+    exportDecisions: 'Export decision logs (incl. chain of thought) as JSON',
+
+    // Notifications page
+    notificationsNav: 'Notifications',
+    notificationsTitle: 'Notifications',
+    notificationsDesc:
+      'Deliver trade alerts (open / close / failure) to Telegram, Webhook or Email channels',
+    addChannel: 'Add Channel',
+    editChannel: 'Edit Channel',
+    telegramChannel: 'Telegram',
+    webhookChannel: 'Webhook',
+    emailChannel: 'Email',
+    channelName: 'Channel Name',
+    channelType: 'Channel Type',
+    channelNameRequired: 'Channel name is required',
+    channelSaved: 'Channel saved',
+    channelDeleted: 'Channel deleted',
+    sendTest: 'Send Test',
+    testSent: 'Test notification sent',
+    testFailed: 'Test notification failed',
+    noChannels: 'No notification channels',
+    noChannelsDesc:
+      'Add a Telegram / Webhook / Email channel to receive trade alerts',
+    deliveryLogs: 'Delivery Logs',
+    noDeliveryLogs: 'No delivery logs yet',
+    eventCol: 'Event',
+    messageCol: 'Message',
+    channelNameCol: 'Channel',
+    failedCol: 'Failed',
+    secretField: 'secret',
+    channelHelp:
+      'Telegram: create a bot via @BotFather, then message it (or add it to a group) and use the chat ID. Webhook receives JSON POST with HMAC-SHA256 signature header X-Nofx-Signature when a secret is set. Email uses your own SMTP server.',
+
+    // Settings page
+    settingsNav: 'Settings',
+    settingsTitle: 'Account Settings',
+    settingsDesc: 'Manage your profile, password and two-factor authentication',
+    accountInfo: 'Account Information',
+    emailCol: 'Email',
+    registeredAt: 'Registered at',
+    changePassword: 'Change Password',
+    oldPassword: 'Current password',
+    newPasswordPlaceholder8: 'New password (min 8 chars)',
+    confirmNewPassword: 'Confirm new password',
+    updatePassword: 'Update Password',
+    newPasswordTooShort: 'New password must be at least 8 characters',
+    settingsPasswordMismatch: 'New passwords do not match',
+    passwordChanged: 'Password updated successfully',
+    twofaManagement: 'Two-Factor Authentication',
+    twofaDesc:
+      'Reset generates a new TOTP secret. You must re-scan the QR code with your authenticator app and confirm a code to re-enable 2FA. Login requires 2FA when enabled.',
+    resetTwofa: 'Reset 2FA Secret',
+    twofaResetDone: 'New secret generated, please scan and confirm',
+    twofaScanHint:
+      'Scan this QR code with your authenticator app (e.g. Google Authenticator), then enter the 6-digit code to confirm:',
+    twofaEnabled: '2FA enabled successfully',
+    verificationCode: '6-digit code',
+
+    // Admin page
+    adminNav: 'Admin',
+    adminTitle: 'Admin Panel',
+    adminDesc:
+      'System health, user overview and global trading activity (admin account only)',
+    adminUsersTotal: 'Users',
+    adminVerified: 'Verified',
+    adminTradersTotal: 'Traders',
+    adminTradersRunning: 'Running',
+    adminMemory: 'Memory',
+    adminGoroutines: 'Goroutines',
+    adminUserList: 'Users',
+    adminTraderCount: 'Traders',
+    adminRunningCount: 'Running',
+    adminNoUsers: 'No users',
+    adminRecentActivity: 'Recent Activity (all traders)',
+
+    // Manual order
+    manualOrder: 'Manual Order',
+    confirmManualOrder:
+      'Submit {action} order for {symbol}? This goes through the same risk controls and protection orders as AI decisions.',
+    manualOrderSuccess: 'Manual order executed',
+    manualOrderFailed: 'Manual order failed',
+    stopLossPctLabel: 'Stop loss % (from entry)',
+    takeProfitPctLabel: 'Take profit % (from entry)',
+    submitOrder: 'Submit Order',
+    manualOrderHelp:
+      'Position size and leverage are computed by the backend risk engine (same as AI trades); stop loss / take profit percentages are converted to absolute prices at the current market price.',
+    manualCloseHelp:
+      'The entire position for this symbol and direction will be closed at market price.',
+
+    // Batch trader management
+    selectAll: 'Select all',
+    batchStart: 'Batch Start',
+    batchStop: 'Batch Stop',
+
+    // Theme
+    switchToLight: 'Switch to light theme',
+    switchToDark: 'Switch to dark theme',
+
     // Risk controls
     closeAll: 'Close All',
     confirmCloseAll:
@@ -221,6 +350,19 @@ export const translations = {
       runList: {
         title: 'Runs',
         count: 'Total {count} records',
+      },
+      compare: {
+        title: 'Run Comparison',
+        desc: 'Select up to {max} finished runs to overlay normalized return curves and compare metrics (best value highlighted)',
+        clear: 'Clear selection',
+        noFinished: 'No finished runs available for comparison yet',
+        metric: 'Metric',
+        totalReturn: 'Total Return',
+        maxDrawdown: 'Max Drawdown',
+        sharpe: 'Sharpe Ratio',
+        profitFactor: 'Profit Factor',
+        winRate: 'Win Rate',
+        trades: 'Trades',
       },
       filters: {
         allStates: 'All states',
@@ -1162,6 +1304,132 @@ export const translations = {
     shortPosition: '空仓',
     liveExposure: '实时敞口',
 
+    // Order & Fill History
+    executionHistory: '执行历史',
+    orderHistory: '历史订单',
+    ordersTab: '订单',
+    fillsTab: '成交',
+    recordsUnit: '条',
+    timeCol: '时间',
+    priceCol: '价格',
+    feeCol: '手续费',
+    statusCol: '状态',
+    realizedPnL: '已实现盈亏',
+    noOrdersYet: '暂无订单',
+    noOrdersDesc: '交易员执行交易后，订单记录将显示在这里',
+    noFillsYet: '暂无成交',
+    noFillsDesc: '交易完成后，交易所成交记录将显示在这里',
+    protectionActive: '止损/止盈保护已生效',
+
+    // Performance Metrics
+    riskAnalytics: '风险与分析',
+    performanceMetrics: '绩效指标',
+    closedWinRate: '平仓胜率',
+    profitFactor: '盈亏比',
+    grossProfit: '总盈利',
+    grossLoss: '总亏损',
+    avgWinLabel: '平均盈利',
+    avgLossLabel: '平均亏损',
+    pnlBySymbol: '按币种已实现盈亏',
+
+    // Export
+    exportCsv: '导出 CSV',
+    exportPositions: '将当前持仓导出为 CSV',
+    exportDecisions: '将决策日志（含思维链）导出为 JSON',
+
+    // Notifications page
+    notificationsNav: '通知',
+    notificationsTitle: '通知管理',
+    notificationsDesc:
+      '将交易告警（开仓/平仓/失败）推送到 Telegram、Webhook 或邮箱渠道',
+    addChannel: '添加渠道',
+    editChannel: '编辑渠道',
+    telegramChannel: 'Telegram',
+    webhookChannel: 'Webhook',
+    emailChannel: '邮箱',
+    channelName: '渠道名称',
+    channelType: '渠道类型',
+    channelNameRequired: '请填写渠道名称',
+    channelSaved: '渠道已保存',
+    channelDeleted: '渠道已删除',
+    sendTest: '发送测试',
+    testSent: '测试通知已发送',
+    testFailed: '测试通知发送失败',
+    noChannels: '暂无通知渠道',
+    noChannelsDesc: '添加 Telegram / Webhook / 邮箱渠道以接收交易告警',
+    deliveryLogs: '发送日志',
+    noDeliveryLogs: '暂无发送日志',
+    eventCol: '事件',
+    messageCol: '内容',
+    channelNameCol: '渠道',
+    failedCol: '失败',
+    secretField: '密钥',
+    channelHelp:
+      'Telegram：通过 @BotFather 创建机器人，先给机器人发一条消息（或将其拉入群），再填入 chat_id。Webhook 接收 JSON POST，设置 secret 后会附带 HMAC-SHA256 签名头 X-Nofx-Signature。邮箱使用你自己的 SMTP 服务器。',
+
+    // Settings page
+    settingsNav: '设置',
+    settingsTitle: '账户设置',
+    settingsDesc: '管理个人资料、密码与双因素认证',
+    accountInfo: '账户信息',
+    emailCol: '邮箱',
+    registeredAt: '注册时间',
+    changePassword: '修改密码',
+    oldPassword: '当前密码',
+    newPasswordPlaceholder8: '新密码（至少 8 位）',
+    confirmNewPassword: '确认新密码',
+    updatePassword: '更新密码',
+    newPasswordTooShort: '新密码至少需要 8 个字符',
+    settingsPasswordMismatch: '两次输入的新密码不一致',
+    passwordChanged: '密码修改成功',
+    twofaManagement: '双因素认证（2FA）',
+    twofaDesc:
+      '重置会生成新的 TOTP 密钥，需用验证器 App 重新扫码并输入 6 位验证码确认后才会重新启用 2FA。启用后登录需要验证码。',
+    resetTwofa: '重置 2FA 密钥',
+    twofaResetDone: '新密钥已生成，请扫码并确认',
+    twofaScanHint:
+      '使用验证器 App（如 Google Authenticator）扫描二维码，然后输入 6 位验证码确认：',
+    twofaEnabled: '2FA 已启用',
+    verificationCode: '6 位验证码',
+
+    // Admin page
+    adminNav: '管理',
+    adminTitle: '管理后台',
+    adminDesc: '系统健康、用户概览与全局交易动态（仅 admin 账户可用）',
+    adminUsersTotal: '用户数',
+    adminVerified: '已验证',
+    adminTradersTotal: '交易员',
+    adminTradersRunning: '运行中',
+    adminMemory: '内存',
+    adminGoroutines: '协程',
+    adminUserList: '用户列表',
+    adminTraderCount: '交易员数',
+    adminRunningCount: '运行中',
+    adminNoUsers: '暂无用户',
+    adminRecentActivity: '最近动态（全部交易员）',
+
+    // Manual order
+    manualOrder: '手动下单',
+    confirmManualOrder:
+      '确认为 {symbol} 提交 {action} 订单？将执行与 AI 决策相同的风控校验和保护单。',
+    manualOrderSuccess: '手动下单已执行',
+    manualOrderFailed: '手动下单失败',
+    stopLossPctLabel: '止损百分比（相对入场价）',
+    takeProfitPctLabel: '止盈百分比（相对入场价）',
+    submitOrder: '提交订单',
+    manualOrderHelp:
+      '仓位大小与杠杆由后端风控引擎计算（与 AI 交易一致）；止损/止盈百分比会按当前市场价格转换为绝对价格。',
+    manualCloseHelp: '将按市价全部平掉该币种该方向的持仓。',
+
+    // Batch trader management
+    selectAll: '全选',
+    batchStart: '批量启动',
+    batchStop: '批量停止',
+
+    // Theme
+    switchToLight: '切换到亮色主题',
+    switchToDark: '切换到暗色主题',
+
     // 风控操作
     closeAll: '一键全平',
     confirmCloseAll: '确定要平掉全部 {count} 个持仓吗？此操作不可撤销。',
@@ -1306,6 +1574,19 @@ export const translations = {
       runList: {
         title: '运行列表',
         count: '共 {count} 条记录',
+      },
+      compare: {
+        title: '回测对比',
+        desc: '选择最多 {max} 个已完成的回测，叠加归一化收益率曲线并对比核心指标（最优值高亮）',
+        clear: '清除选择',
+        noFinished: '暂无可对比的已完成回测',
+        metric: '指标',
+        totalReturn: '总收益率',
+        maxDrawdown: '最大回撤',
+        sharpe: '夏普比率',
+        profitFactor: '盈亏比',
+        winRate: '胜率',
+        trades: '交易次数',
       },
       filters: {
         allStates: '全部状态',

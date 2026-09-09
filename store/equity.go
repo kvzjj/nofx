@@ -121,6 +121,50 @@ func (s *EquityStore) GetLatest(traderID string, limit int) ([]*EquitySnapshot, 
 	return snapshots, nil
 }
 
+// DrawdownStats holds peak-to-trough drawdown metrics.
+type DrawdownStats struct {
+	MaxDrawdownAbs float64 `json:"max_drawdown_abs"` // absolute USDT drop from a peak
+	MaxDrawdownPct float64 `json:"max_drawdown_pct"` // percentage drop from a peak
+	PeakEquity     float64 `json:"peak_equity"`
+	TroughEquity   float64 `json:"trough_equity"`
+}
+
+// GetMaxDrawdown walks the full equity snapshot series (oldest → newest) and
+// returns the largest peak-to-trough decline of total equity.
+func (s *EquityStore) GetMaxDrawdown(traderID string) (*DrawdownStats, error) {
+	rows, err := s.db.Query(`
+		SELECT total_equity FROM trader_equity_snapshots
+		WHERE trader_id = ? AND total_equity > 0
+		ORDER BY timestamp ASC
+	`, traderID)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query equity for drawdown: %w", err)
+	}
+	defer rows.Close()
+
+	stats := &DrawdownStats{}
+	peak := 0.0
+	for rows.Next() {
+		var equity float64
+		if err := rows.Scan(&equity); err != nil {
+			continue
+		}
+		if equity > peak {
+			peak = equity
+		}
+		if peak > 0 {
+			dd := peak - equity
+			if dd > stats.MaxDrawdownAbs {
+				stats.MaxDrawdownAbs = dd
+				stats.MaxDrawdownPct = dd / peak * 100
+				stats.PeakEquity = peak
+				stats.TroughEquity = equity
+			}
+		}
+	}
+	return stats, rows.Err()
+}
+
 // GetByTimeRange gets equity records within specified time range
 func (s *EquityStore) GetByTimeRange(traderID string, start, end time.Time) ([]*EquitySnapshot, error) {
 	rows, err := s.db.Query(`
