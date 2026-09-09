@@ -8,6 +8,8 @@ import (
 	"nofx/logger"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/metrics"
+	"nofx/notification"
 	"nofx/notify"
 	"nofx/store"
 	"strconv"
@@ -78,42 +80,44 @@ type AutoTraderConfig struct {
 
 // AutoTrader automatic trader
 type AutoTrader struct {
-	id                    string // Trader unique identifier
-	name                  string // Trader display name
-	aiModel               string // AI model name
-	exchange              string // Trading platform type (binance/bybit/etc)
-	exchangeID            string // Exchange account UUID
-	showInCompetition     bool   // Whether to show in competition page
-	config                AutoTraderConfig
-	trader                Trader // Use Trader interface (supports multiple platforms)
-	mcpClient             mcp.AIClient
-	store                 *store.Store             // Data storage (decision records, etc.)
-	strategyEngine        *decision.StrategyEngine // Strategy engine (uses strategy configuration)
-	cycleNumber           int                      // Current cycle number
-	initialBalance        float64
-	dailyPnL              float64
-	dayStartEquity        float64
-	equityHighWater       float64
-	consecutiveFailures   int
-	customPrompt          string // Custom trading strategy prompt
-	overrideBasePrompt    bool   // Whether to override base prompt
-	lastResetTime         time.Time
-	stopUntil             time.Time
-	manualReviewRequired  bool
-	lifecycleMutex        sync.Mutex
-	isRunning             bool
-	isStopping            bool
-	startTime             time.Time               // System start time
-	callCount             atomic.Int64            // AI call count (read by API goroutines)
-	positionFirstSeenTime map[string]int64        // Position first seen time (symbol_side -> timestamp in milliseconds)
-	stopMonitorCh         chan struct{}           // Used to stop monitoring goroutine
-	monitorWg             sync.WaitGroup          // Used to wait for monitoring goroutine to finish
-	peakPnLCache          map[string]peakPnLEntry // Peak profit cache (symbol_side -> peak record)
-	peakPnLCacheMutex     sync.RWMutex            // Cache read-write lock
-	entryMutex            sync.Mutex              // Serializes risk snapshot and entry submission
-	riskMutex             sync.Mutex              // Protects account-level circuit-breaker state
-	lastBalanceSyncTime   time.Time               // Last balance sync time
-	userID                string                  // User ID
+	id                      string // Trader unique identifier
+	name                    string // Trader display name
+	aiModel                 string // AI model name
+	exchange                string // Trading platform type (binance/bybit/etc)
+	exchangeID              string // Exchange account UUID
+	showInCompetition       bool   // Whether to show in competition page
+	config                  AutoTraderConfig
+	trader                  Trader // Use Trader interface (supports multiple platforms)
+	mcpClient               mcp.AIClient
+	store                   *store.Store             // Data storage (decision records, etc.)
+	strategyEngine          *decision.StrategyEngine // Strategy engine (uses strategy configuration)
+	cycleNumber             int                      // Current cycle number
+	initialBalance          float64
+	dailyPnL                float64
+	dayStartEquity          float64
+	equityHighWater         float64
+	consecutiveFailures     int
+	customPrompt            string // Custom trading strategy prompt
+	overrideBasePrompt      bool   // Whether to override base prompt
+	lastResetTime           time.Time
+	stopUntil               time.Time
+	manualReviewRequired    bool
+	lifecycleMutex          sync.Mutex
+	isRunning               bool
+	isStopping              bool
+	startTime               time.Time                         // System start time
+	callCount               atomic.Int64                      // AI call count (read by API goroutines)
+	positionFirstSeenTime   map[string]int64                  // Position first seen time (symbol_side -> timestamp in milliseconds)
+	stopMonitorCh           chan struct{}                     // Used to stop monitoring goroutine
+	monitorWg               sync.WaitGroup                    // Used to wait for monitoring goroutine to finish
+	peakPnLCache            map[string]peakPnLEntry           // Peak profit cache (symbol_side -> peak record)
+	peakPnLCacheMutex       sync.RWMutex                      // Cache read-write lock
+	entryMutex              sync.Mutex                        // Serializes risk snapshot and entry submission
+	riskMutex               sync.Mutex                        // Protects account-level circuit-breaker state
+	feedbackMutex           sync.Mutex                        // Protects recentExecutionFailures
+	recentExecutionFailures []decision.RecentExecutionFailure // Recent failed instructions fed back to the AI
+	lastBalanceSyncTime     time.Time                         // Last balance sync time
+	userID                  string                            // User ID
 }
 
 // NewAutoTrader creates an automatic trader
@@ -859,6 +863,13 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 		logger.Infof("⚠️ [%s] Store is nil, cannot get recent trades", at.name)
 	}
 
+	// 7b. Feed recent execution failures back to the AI so it can correct
+	// itself instead of repeating instructions that keep failing.
+	if failures := at.recentExecutionFailuresForPrompt(); len(failures) > 0 {
+		ctx.RecentFailures = failures
+		logger.Infof("🔁 [%s] Feeding back %d recent execution failure(s) to AI", at.name, len(failures))
+	}
+
 	// 8. Get quantitative data (if enabled in strategy config)
 	if strategyConfig.Indicators.EnableQuantData && strategyConfig.Indicators.QuantDataAPIURL != "" {
 		// Collect symbols to query (candidate coins + position coins)
@@ -893,13 +904,28 @@ func (at *AutoTrader) buildTradingContext() (*decision.Context, error) {
 	return ctx, nil
 }
 
-// executeDecisionWithRecord executes AI decision and records detailed information
+// executeDecisionWithRecord executes AI decision and records detailed information.
+// Every execution path (cycle loop and external calls) funnels through here,
+// so failures are captured uniformly and fed back to the next AI cycle.
 func (at *AutoTrader) executeDecisionWithRecord(decision *decision.Decision, actionRecord *store.DecisionAction) error {
 	if decision.Action == "open_long" || decision.Action == "open_short" {
 		if err := at.enforceEntryDecision(decision); err != nil {
+			at.rememberExecutionFailure(decision.Symbol, decision.Action, err)
 			return err
 		}
 	}
+	err := at.dispatchDecisionWithRecord(decision, actionRecord)
+	if err != nil {
+		at.rememberExecutionFailure(decision.Symbol, decision.Action, err)
+	} else if decision.Action != "hold" && decision.Action != "wait" {
+		// A successful execution supersedes earlier failures of the same
+		// instruction; only still-ineffective intents are fed back.
+		at.forgetExecutionFailureOnSuccess(decision.Symbol, decision.Action)
+	}
+	return err
+}
+
+func (at *AutoTrader) dispatchDecisionWithRecord(decision *decision.Decision, actionRecord *store.DecisionAction) error {
 	switch decision.Action {
 	case "open_long":
 		return at.executeOpenLongWithRecord(decision, actionRecord)
@@ -1003,22 +1029,38 @@ func (at *AutoTrader) buildOpenOrderOptions(side string, currentPrice float64) O
 
 func (at *AutoTrader) openLong(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
 	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
-		return advanced.OpenLongWithOptions(symbol, quantity, leverage, options)
+		order, err := advanced.OpenLongWithOptions(symbol, quantity, leverage, options)
+		at.recordOrderMetrics(err)
+		return order, err
 	}
 	if options.Type == OrderTypeLimit {
 		logger.Infof("  ⚠️ %s does not support configurable order type, falling back to market order", at.exchange)
 	}
-	return at.trader.OpenLong(symbol, quantity, leverage)
+	order, err := at.trader.OpenLong(symbol, quantity, leverage)
+	at.recordOrderMetrics(err)
+	return order, err
 }
 
 func (at *AutoTrader) openShort(symbol string, quantity float64, leverage int, options OrderOptions) (map[string]interface{}, error) {
 	if advanced, ok := at.trader.(AdvancedOrderTrader); ok {
-		return advanced.OpenShortWithOptions(symbol, quantity, leverage, options)
+		order, err := advanced.OpenShortWithOptions(symbol, quantity, leverage, options)
+		at.recordOrderMetrics(err)
+		return order, err
 	}
 	if options.Type == OrderTypeLimit {
 		logger.Infof("  ⚠️ %s does not support configurable order type, falling back to market order", at.exchange)
 	}
-	return at.trader.OpenShort(symbol, quantity, leverage)
+	order, err := at.trader.OpenShort(symbol, quantity, leverage)
+	at.recordOrderMetrics(err)
+	return order, err
+}
+
+// recordOrderMetrics tracks exchange order submission outcomes.
+func (at *AutoTrader) recordOrderMetrics(err error) {
+	metrics.OrdersTotal.Inc()
+	if err != nil {
+		metrics.OrderFailures.Inc()
+	}
 }
 
 // executeOpenLongWithRecord executes open long position and records detailed information
@@ -2003,6 +2045,15 @@ func (at *AutoTrader) logBackendForcedAction(symbol, action, orderID string, act
 	if err := at.saveDecision(record); err != nil {
 		logger.Warnf("⚠️ [%s] failed to save backend-forced action record: %v", at.name, err)
 	}
+
+	// Trading notification: trailing-profit protection acts on the user's
+	// position without AI involvement, so it must always be surfaced.
+	severity := notification.SeverityWarning
+	if actionErr != nil {
+		severity = notification.SeverityCritical
+	}
+	at.publishPositionEvent(notification.EventTakeProfitHit, severity, symbol,
+		fmt.Sprintf("🛡 Trailing profit protection: %s", symbol), reason)
 }
 
 func errString(err error) string {
@@ -2785,6 +2836,26 @@ func (at *AutoTrader) recordAndConfirmOrder(orderResult map[string]interface{}, 
 	return true
 }
 
+// publishPositionEvent emits a trading notification event to the global bus.
+// It never blocks or panics the trading loop; a nil bus target is tolerated.
+func (at *AutoTrader) publishPositionEvent(eventType string, severity notification.Severity, symbol, title, body string) {
+	e := &notification.Event{
+		EventType:  eventType,
+		Severity:   severity,
+		UserID:     at.userID,
+		TraderID:   at.id,
+		TraderName: at.name,
+		Symbol:     symbol,
+		Title:      title,
+		Body:       body,
+		Time:       time.Now().UTC(),
+	}
+	if e.Title != "" {
+		e.Title = at.name + ": " + e.Title
+	}
+	notification.Publish(e)
+}
+
 // recordPositionChange records position change (create record on open, update record on close)
 func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string, quantity, price float64, leverage int, entryPrice float64, fee float64) {
 	if at.store == nil {
@@ -2812,6 +2883,9 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 			logger.Infof("  ⚠️ Failed to record position: %v", err)
 		} else {
 			logger.Infof("  📊 Position recorded [%s] %s %s @ %.4f", at.id[:8], symbol, side, price)
+			at.publishPositionEvent(notification.EventPositionOpened, notification.SeverityInfo, symbol,
+				fmt.Sprintf("📈 Opened %s %s", strings.ToLower(side), symbol),
+				fmt.Sprintf("Quantity: %.4f @ %.4f, Leverage: %dx", quantity, price, leverage))
 		}
 
 	case "close_long", "close_short":
@@ -2842,6 +2916,9 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 				logger.Errorf("  Failed to record partial close: %v", err)
 			} else {
 				logger.Warnf("  Position partially closed [%s] %s %s: closed=%.8f remaining=%.8f", at.id, symbol, side, closedQuantity, remainingQuantity)
+				at.publishPositionEvent(notification.EventPartialClose, notification.SeverityInfo, symbol,
+					fmt.Sprintf("〰️ Partially closed %s %s (%+.2f USDT)", strings.ToLower(side), symbol, realizedPnL),
+					fmt.Sprintf("Closed: %.4f, Remaining: %.4f, P&L: %+.2f USDT", closedQuantity, remainingQuantity, realizedPnL))
 			}
 			return
 		}
@@ -2860,6 +2937,23 @@ func (at *AutoTrader) recordPositionChange(orderID, symbol, side, action string,
 		} else {
 			logger.Infof("  📊 Position closed [%s] %s %s @ %.4f → %.4f, P&L: %.2f, Fee: %.4f",
 				at.id[:8], symbol, side, openPos.EntryPrice, price, realizedPnL, fee)
+			severity := notification.SeverityInfo
+			emoji := "✅"
+			if realizedPnL < 0 {
+				severity = notification.SeverityWarning
+				emoji = "🔻"
+			}
+			pnlPct := 0.0
+			if openPos.EntryPrice > 0 && openPos.Leverage > 0 {
+				pnlPct = ((price - openPos.EntryPrice) / openPos.EntryPrice) * float64(openPos.Leverage)
+				if side == "SHORT" {
+					pnlPct = -pnlPct
+				}
+			}
+			at.publishPositionEvent(notification.EventPositionClosed, severity, symbol,
+				fmt.Sprintf("%s Closed %s %s (%+.2f USDT)", emoji, strings.ToLower(side), symbol, realizedPnL),
+				fmt.Sprintf("Entry: %.4f → Exit: %.4f, P&L: %+.2f USDT (%+.2f%%), Fee: %.4f",
+					openPos.EntryPrice, price, realizedPnL, pnlPct, fee))
 		}
 	}
 }
@@ -3024,6 +3118,9 @@ func (at *AutoTrader) triggerRiskLocked(reason string) {
 	if until.After(at.stopUntil) {
 		at.stopUntil = until
 		logger.Warnf("🚨 [RISK CONTROL] %s triggered; new entries paused until %s", reason, until.Format(time.RFC3339))
+		at.publishPositionEvent(notification.EventRiskTriggered, notification.SeverityCritical, "",
+			fmt.Sprintf("🚨 Risk control triggered: %s", reason),
+			fmt.Sprintf("New entries paused until %s", until.Format("2006-01-02 15:04 MST")))
 	}
 }
 
@@ -3130,6 +3227,97 @@ func (at *AutoTrader) recordExecutionSuccess() {
 	at.riskMutex.Lock()
 	at.consecutiveFailures = 0
 	at.riskMutex.Unlock()
+}
+
+// maxRecentExecutionFailures bounds the in-memory failure buffer.
+const maxRecentExecutionFailures = 16
+
+// maxExecutionFailureMessageLen truncates verbose exchange errors so the
+// feedback injected into the AI prompt stays compact.
+const maxExecutionFailureMessageLen = 220
+
+// rememberExecutionFailure records a failed instruction so the next AI cycle
+// can see it and avoid repeating an ineffective decision. Policy rejections
+// (e.g. "already has long position") are included on purpose: they tell the
+// AI why its intent was blocked.
+func (at *AutoTrader) rememberExecutionFailure(symbol, action string, err error) {
+	if err == nil {
+		return
+	}
+	message := strings.TrimSpace(err.Error())
+	if message == "" {
+		message = "unknown execution error"
+	}
+	// Collapse embedded newlines so a multi-line error cannot break the
+	// numbered list format rendered into the prompt.
+	message = strings.Join(strings.Fields(message), " ")
+	if len(message) > maxExecutionFailureMessageLen {
+		message = message[:maxExecutionFailureMessageLen] + "..."
+	}
+
+	at.feedbackMutex.Lock()
+	defer at.feedbackMutex.Unlock()
+	at.recentExecutionFailures = append(at.recentExecutionFailures, decision.RecentExecutionFailure{
+		Symbol:    symbol,
+		Action:    action,
+		Error:     message,
+		Timestamp: time.Now(),
+	})
+	if overflow := len(at.recentExecutionFailures) - maxRecentExecutionFailures; overflow > 0 {
+		at.recentExecutionFailures = at.recentExecutionFailures[overflow:]
+	}
+}
+
+// recentExecutionFailuresForPrompt returns recent failures within the
+// feedback window (2x scan interval, so at least the previous cycle is
+// covered), deduplicated by symbol+action+error, newest first, capped at 8.
+// A failed instruction that later succeeds is removed from the feedback.
+func (at *AutoTrader) recentExecutionFailuresForPrompt() []decision.RecentExecutionFailure {
+	window := 10 * time.Minute
+	if at.config.ScanInterval > 0 {
+		if w := 2 * at.config.ScanInterval; w > window {
+			window = w
+		}
+	}
+	cutoff := time.Now().Add(-window)
+
+	at.feedbackMutex.Lock()
+	defer at.feedbackMutex.Unlock()
+
+	seen := make(map[string]bool)
+	var failures []decision.RecentExecutionFailure
+	for i := len(at.recentExecutionFailures) - 1; i >= 0; i-- {
+		f := at.recentExecutionFailures[i]
+		if f.Timestamp.Before(cutoff) {
+			continue
+		}
+		key := f.Symbol + "|" + f.Action + "|" + f.Error
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		failures = append(failures, f)
+		if len(failures) >= 8 {
+			break
+		}
+	}
+	return failures
+}
+
+// forgetExecutionFailureOnSuccess drops matching failure entries once the
+// same symbol+action executes successfully, so the prompt only reflects
+// instructions that are still not effective.
+func (at *AutoTrader) forgetExecutionFailureOnSuccess(symbol, action string) {
+	at.feedbackMutex.Lock()
+	defer at.feedbackMutex.Unlock()
+	kept := at.recentExecutionFailures[:0]
+	for _, f := range at.recentExecutionFailures {
+		if f.Symbol == symbol && f.Action == action {
+			continue
+		}
+		kept = append(kept, f)
+	}
+	at.recentExecutionFailures = kept
 }
 
 // isPendingReconciliation reports an error whose outcome is not yet known:

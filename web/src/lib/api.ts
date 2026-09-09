@@ -22,6 +22,10 @@ import type {
   BacktestRunMetadata,
   Strategy,
   StrategyConfig,
+  NotificationRecord,
+  NotificationSettings,
+  AuditEvent,
+  BackupRecord,
   OrderHistoryResponse,
   FillHistoryResponse,
   PerformanceMetrics,
@@ -952,5 +956,105 @@ export const api = {
     )
     if (!result.success) throw new Error('复制策略失败')
     return result.data!
+  },
+
+  // ==================== 通知系统 (P0) ====================
+
+  async getNotifications(
+    limit = 50,
+    offset = 0
+  ): Promise<{ notifications: NotificationRecord[]; unread: number }> {
+    const res = await fetch(
+      `${API_BASE}/notifications?limit=${limit}&offset=${offset}`,
+      {
+        headers: getAuthHeaders(),
+      }
+    )
+    return handleJSONResponse(res)
+  },
+
+  async markNotificationRead(id: string): Promise<void> {
+    const res = await fetch(`${API_BASE}/notifications/${id}/read`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    await handleJSONResponse(res)
+  },
+
+  async markAllNotificationsRead(): Promise<void> {
+    const res = await fetch(`${API_BASE}/notifications/read-all`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    await handleJSONResponse(res)
+  },
+
+  async getNotificationSettings(): Promise<NotificationSettings> {
+    const res = await fetch(`${API_BASE}/notification-settings`, {
+      headers: getAuthHeaders(),
+    })
+    const data = await handleJSONResponse<{ settings: NotificationSettings }>(
+      res
+    )
+    return data.settings
+  },
+
+  async updateNotificationSettings(
+    settings: NotificationSettings
+  ): Promise<NotificationSettings> {
+    const res = await fetch(`${API_BASE}/notification-settings`, {
+      method: 'PUT',
+      headers: getAuthHeaders(),
+      body: JSON.stringify(settings),
+    })
+    const data = await handleJSONResponse<{ settings: NotificationSettings }>(
+      res
+    )
+    return data.settings
+  },
+
+  async testNotification(): Promise<{ message: string }> {
+    const res = await fetch(`${API_BASE}/notification-settings/test`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    return handleJSONResponse(res)
+  },
+
+  // ==================== 审计日志 (P0) ====================
+
+  async getAuditLogs(
+    limit = 100,
+    offset = 0,
+    action?: string
+  ): Promise<AuditEvent[]> {
+    const params = new URLSearchParams({
+      limit: String(limit),
+      offset: String(offset),
+    })
+    if (action) params.set('action', action)
+    const res = await fetch(`${API_BASE}/audit-logs?${params}`, {
+      headers: getAuthHeaders(),
+    })
+    const data = await handleJSONResponse<{ events: AuditEvent[] }>(res)
+    return data.events || []
+  },
+
+  // ==================== 备份 (P1) ====================
+
+  async triggerBackup(): Promise<{ message: string; path: string }> {
+    const res = await fetch(`${API_BASE}/backups`, {
+      method: 'POST',
+      headers: getAuthHeaders(),
+    })
+    return handleJSONResponse(res)
+  },
+
+  async getBackups(): Promise<BackupRecord[]> {
+    const res = await fetch(`${API_BASE}/backups`, {
+      headers: getAuthHeaders(),
+    })
+    const data = await handleJSONResponse<{ backups: BackupRecord[] }>(res)
+    return data.backups || []
   },
 }

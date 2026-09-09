@@ -1,4 +1,4 @@
-import { useEffect } from 'react'
+import { useEffect, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import useSWR from 'swr'
 import { api } from '../lib/api'
@@ -11,6 +11,7 @@ import {
   SignalSourceModal,
   ModelConfigModal,
   ExchangeConfigModal,
+  NotificationSettingsModal,
 } from '../components/traders'
 import { PageHeader } from '../components/traders/sections/PageHeader'
 import { SignalSourceWarning } from '../components/traders/sections/SignalSourceWarning'
@@ -26,6 +27,8 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
   const { language } = useLanguage()
   const { user, token } = useAuth()
   const navigate = useNavigate()
+  const [showNotificationSettings, setShowNotificationSettings] =
+    useState(false)
 
   // Zustand stores
   const {
@@ -143,6 +146,7 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
         onAddModel={handleAddModel}
         onAddExchange={handleAddExchange}
         onConfigureSignalSource={() => setShowSignalSourceModal(true)}
+        onNotificationSettings={() => setShowNotificationSettings(true)}
         onCreateTrader={() => setShowCreateModal(true)}
       />
 
@@ -230,6 +234,13 @@ export function AITradersPage({ onTraderSelect }: AITradersPageProps) {
           oiTopUrl={userSignalSource.oiTopUrl}
           onSave={handleSaveSignalSource}
           onClose={() => setShowSignalSourceModal(false)}
+          language={language}
+        />
+      )}
+
+      {showNotificationSettings && (
+        <NotificationSettingsModal
+          onClose={() => setShowNotificationSettings(false)}
           language={language}
         />
       )}

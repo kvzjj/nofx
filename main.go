@@ -10,6 +10,8 @@ import (
 	"nofx/manager"
 	"nofx/market"
 	"nofx/mcp"
+	"nofx/metrics"
+	"nofx/notification"
 	"nofx/notify"
 	"nofx/store"
 	"nofx/trader"
@@ -101,6 +103,44 @@ func main() {
 	auth.SetJWTSecret(cfg.JWTSecret)
 	logger.Info("🔑 JWT secret configured")
 
+	// P1: persist the token blacklist so logouts survive restarts
+	auth.SetTokenStore(st.TokenBlacklist())
+	logger.Info("🔐 Persistent token blacklist enabled")
+
+	// P0: initialize the notification service (in-app + Telegram/webhook/email)
+	notification.Init(st)
+	logger.Info("🔔 Notification service initialized")
+
+	// P1: scheduled database backups (VACUUM INTO + retention pruning)
+	backupSvc := store.NewBackupService(st.DB(), store.BackupConfig{
+		Enabled:        cfg.BackupEnabled,
+		Dir:            cfg.BackupDir,
+		Interval:       time.Duration(cfg.BackupIntervalHours) * time.Hour,
+		RetentionCount: cfg.BackupRetentionCount,
+	})
+	backupSvc.Start()
+	defer backupSvc.Stop()
+	if cfg.BackupEnabled {
+		logger.Infof("🗄️  Scheduled backups enabled: every %dh to %s (keep %d)",
+			cfg.BackupIntervalHours, cfg.BackupDir, cfg.BackupRetentionCount)
+		// Take one backup at boot so a fresh deployment always has a baseline.
+		go func() {
+			if _, err := backupSvc.RunNow("startup"); err != nil {
+				logger.Errorf("🗄️  Startup backup failed: %v", err)
+			}
+		}()
+	}
+
+	// P1: runtime metrics (goroutines / memory / GC) for /api/metrics
+	metricsStop := make(chan struct{})
+	go metrics.StartRuntimeCollector(metricsStop, 15*time.Second)
+
+	// P0: daily P&L digest scheduler
+	notification.StartDailySummary(st, metricsStop)
+
+	// P1: retention pruning for audit logs and notification history
+	go startRetentionPruner(st, cfg)
+
 	// Start WebSocket market monitor FIRST (before loading traders that may need market data)
 	// This ensures WSMonitorCli is initialized before any trader tries to access it
 	go market.NewWSMonitor(150).Start(nil)
@@ -148,11 +188,15 @@ func main() {
 
 	// Start API server
 	server := api.NewServer(traderManager, st, cryptoService, backtestManager, cfg.APIServerPort)
+	server.SetBackupService(backupSvc)
 	go func() {
 		if err := server.Start(); err != nil {
 			logger.Fatalf("❌ Failed to start API server: %v", err)
 		}
 	}()
+
+	// P1: keep trading gauges fresh (active traders / open positions)
+	go startTradingGaugeUpdater(traderManager, st, metricsStop)
 
 	// Wait for interrupt signal
 	quit := make(chan os.Signal, 1)
@@ -163,10 +207,57 @@ func main() {
 
 	<-quit
 	logger.Info("📴 Shutdown signal received, closing system...")
+	close(metricsStop)
 
 	// Stop all traders
 	traderManager.StopAll()
 	logger.Info("✅ System shut down safely")
+}
+
+// startRetentionPruner periodically deletes expired audit/notification rows.
+func startRetentionPruner(st *store.Store, cfg *config.Config) {
+	prune := func() {
+		if cfg.AuditRetentionDays > 0 {
+			cutoff := time.Now().AddDate(0, 0, -cfg.AuditRetentionDays)
+			if n, err := st.Audit().PruneBefore(cutoff); err == nil && n > 0 {
+				logger.Infof("🧹 Pruned %d audit log(s) older than %dd", n, cfg.AuditRetentionDays)
+			}
+		}
+		if cfg.NotificationRetentionDays > 0 {
+			cutoff := time.Now().AddDate(0, 0, -cfg.NotificationRetentionDays)
+			if n, err := st.Notification().PruneBefore(cutoff); err == nil && n > 0 {
+				logger.Infof("🧹 Pruned %d notification(s) older than %dd", n, cfg.NotificationRetentionDays)
+			}
+		}
+	}
+	prune() // once at boot
+	ticker := time.NewTicker(6 * time.Hour)
+	for range ticker.C {
+		prune()
+	}
+}
+
+// startTradingGaugeUpdater refreshes active-trader / open-position gauges.
+func startTradingGaugeUpdater(tm *manager.TraderManager, st *store.Store, stop <-chan struct{}) {
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-stop:
+			return
+		case <-ticker.C:
+			active := 0
+			for _, t := range tm.GetAllTraders() {
+				if t.IsRunning() {
+					active++
+				}
+			}
+			metrics.ActiveTraders.Set(float64(active))
+			if positions, err := st.Position().CountAllOpen(); err == nil {
+				metrics.OpenPositions.Set(float64(positions))
+			}
+		}
+	}
 }
 
 // newSharedMCPClient creates a shared MCP AI client (for backtesting)

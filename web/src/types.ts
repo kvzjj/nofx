@@ -610,3 +610,70 @@ export interface RiskControlConfig {
   trailing_profit_trigger_pct?: number // Arm once leveraged unrealized profit ≥ this %
   trailing_profit_giveback_pct?: number // Close when profit retraces this % from peak
 }
+
+// ==================== 通知系统 (P0) ====================
+
+// 通知记录（站内信）
+export interface NotificationRecord {
+  id: string
+  user_id: string
+  trader_id?: string
+  trader_name?: string
+  event_type: string
+  severity: 'info' | 'warning' | 'critical'
+  title: string
+  body: string
+  is_read: boolean
+  created_at: string
+}
+
+// 通知渠道设置
+export interface NotificationSettings {
+  user_id: string
+  enabled: boolean
+
+  telegram_enabled: boolean
+  telegram_bot_token?: string
+  telegram_chat_id?: string
+
+  webhook_enabled: boolean
+  webhook_url?: string
+  webhook_secret?: string
+
+  email_enabled: boolean
+  email_to?: string
+  smtp_host?: string
+  smtp_port?: number
+  smtp_username?: string
+  smtp_password?: string
+  smtp_from?: string
+  smtp_use_tls?: boolean
+
+  event_subscriptions?: Record<string, boolean>
+  quiet_hours_start_utc?: number
+  quiet_hours_end_utc?: number
+}
+
+// 审计日志（P0）
+export interface AuditEvent {
+  id: string
+  user_id: string
+  email: string
+  action: string
+  resource_type: string
+  resource_id: string
+  detail: string
+  status: 'success' | 'failure'
+  ip: string
+  user_agent: string
+  created_at: string
+}
+
+// 备份记录（P1）
+export interface BackupRecord {
+  path: string
+  size_bytes: number
+  status: string
+  error: string
+  created_at: string
+}
