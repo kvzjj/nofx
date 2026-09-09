@@ -453,4 +453,6 @@ export interface RiskControlConfig {
   stop_trading_minutes?: number;   // Circuit breaker pause duration
   order_type?: 'market' | 'limit'; // Opening order type; close orders remain market
   limit_price_offset_pct?: number; // Limit order offset from current price in percent
+  pending_order_timeout_sec?: number; // How long a resting limit entry is monitored before cancel
+  pending_order_poll_sec?: number; // Status polling interval for pending limit entries
 }

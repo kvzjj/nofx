@@ -660,6 +660,8 @@ func (tm *TraderManager) addTraderFromStore(traderCfg *store.Trader, aiModelCfg 
 		LimitPriceOffsetPct:        strategyConfig.RiskControl.LimitPriceOffsetPct,
 		ProtectionRetries:          strategyConfig.RiskControl.ProtectionRetries,
 		ProtectionRetryDelay:       time.Duration(strategyConfig.RiskControl.ProtectionRetryDelayMs) * time.Millisecond,
+		PendingOrderPollInterval:   time.Duration(strategyConfig.RiskControl.PendingOrderPollSec) * time.Second,
+		PendingOrderTimeout:        time.Duration(strategyConfig.RiskControl.PendingOrderTimeoutSec) * time.Second,
 		ProtectionFailureAction:    strategyConfig.RiskControl.ProtectionFailureAction,
 		ProtectionFailureReducePct: strategyConfig.RiskControl.ProtectionFailureReducePct,
 		StrategyConfig:             strategyConfig,

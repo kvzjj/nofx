@@ -45,6 +45,10 @@ export function RiskControlEditor({
       limitOrder: { zh: '限价单', en: 'Limit' },
       limitOffset: { zh: '限价偏移', en: 'Limit Offset' },
       limitOffsetDesc: { zh: '做多挂当前价下方，做空挂当前价上方', en: 'Long below current price, short above current price' },
+      pendingTimeout: { zh: '挂单监控时长', en: 'Pending Timeout' },
+      pendingTimeoutDesc: { zh: '限价挂单超过该时长后自动撤销（分钟）', en: 'Resting limit entries are canceled after this window (minutes)' },
+      pendingPoll: { zh: '挂单轮询间隔', en: 'Pending Poll' },
+      pendingPollDesc: { zh: '挂单成交检查间隔（秒）', en: 'How often pending fills are checked (seconds)' },
     }
     return translations[key]?.[language] || key
   }
@@ -444,6 +448,79 @@ export function RiskControlEditor({
               />
               <span className="ml-2" style={{ color: '#848E9C' }}>
                 %
+              </span>
+            </div>
+          </div>
+        </div>
+
+        <div className="grid grid-cols-2 gap-4 mt-4">
+          <div
+            className="p-4 rounded-lg"
+            style={{ background: '#0B0E11', border: '1px solid #2B3139' }}
+          >
+            <label className="block text-sm mb-1" style={{ color: '#EAECEF' }}>
+              {t('pendingTimeout')}
+            </label>
+            <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
+              {t('pendingTimeoutDesc')}
+            </p>
+            <div className="flex items-center">
+              <input
+                type="number"
+                value={Math.round((config.pending_order_timeout_sec ?? 1800) / 60)}
+                onChange={(e) =>
+                  updateField(
+                    'pending_order_timeout_sec',
+                    Math.max(1, Math.round((parseFloat(e.target.value) || 30) * 60))
+                  )
+                }
+                disabled={disabled || (config.order_type ?? 'market') !== 'limit'}
+                min={1}
+                max={1440}
+                step={1}
+                className="w-24 px-3 py-2 rounded disabled:opacity-50"
+                style={{
+                  background: '#1E2329',
+                  border: '1px solid #2B3139',
+                  color: '#EAECEF',
+                }}
+              />
+              <span className="ml-2" style={{ color: '#848E9C' }}>
+                min
+              </span>
+            </div>
+          </div>
+
+          <div
+            className="p-4 rounded-lg"
+            style={{ background: '#0B0E11', border: '1px solid #2B3139' }}
+          >
+            <label className="block text-sm mb-1" style={{ color: '#EAECEF' }}>
+              {t('pendingPoll')}
+            </label>
+            <p className="text-xs mb-2" style={{ color: '#848E9C' }}>
+              {t('pendingPollDesc')}
+            </p>
+            <div className="flex items-center">
+              <input
+                type="number"
+                value={config.pending_order_poll_sec ?? 2}
+                onChange={(e) =>
+                  updateField('pending_order_poll_sec', Math.max(1, Math.round(parseFloat(e.target.value) || 2)))
+                }
+                disabled={disabled || (config.order_type ?? 'market') !== 'limit'}
+                min={1}
+                max={60}
+                step={1}
+                className="w-24 px-3 py-2 rounded disabled:opacity-50"
+                style={{
+                  background: '#1E2329',
+                  border: '1px solid #2B3139',
+                  color: '#EAECEF',
+                }}
+              />
+              <span className="ml-2" style={{ color: '#848E9C' }}>
+                s
               </span>
             </div>
           </div>

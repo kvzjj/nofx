@@ -422,6 +422,11 @@ func TestGetBrOrderID(t *testing.T) {
 func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
 	requests := make(chan map[string]string, 2)
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/fapi/v1/exchangeInfo" {
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"symbols":[{"symbol":"BTCUSDT","filters":[{"filterType":"PRICE_FILTER","tickSize":"0.10"}]}]}`))
+			return
+		}
 		if err := r.ParseForm(); err != nil {
 			t.Errorf("parse form: %v", err)
 		}
@@ -429,6 +434,9 @@ func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
 			"type":          r.FormValue("type"),
 			"quantity":      r.FormValue("quantity"),
 			"closePosition": r.FormValue("closePosition"),
+			"stopPrice":     r.FormValue("stopPrice"),
+			"workingType":   r.FormValue("workingType"),
+			"priceProtect":  r.FormValue("priceProtect"),
 		}
 		w.Header().Set("Content-Type", "application/json")
 		_, _ = w.Write([]byte(`{"orderId":123,"status":"NEW","symbol":"BTCUSDT"}`))
@@ -440,10 +448,10 @@ func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
 	client.HTTPClient = server.Client()
 	trader := &FuturesTrader{client: client}
 
-	if err := trader.SetStopLoss("BTCUSDT", "LONG", 0.01, 49000); err != nil {
+	if err := trader.SetStopLoss("BTCUSDT", "LONG", 0.01, 49000.123456); err != nil {
 		t.Fatal(err)
 	}
-	if err := trader.SetTakeProfit("BTCUSDT", "LONG", 0.01, 51000); err != nil {
+	if err := trader.SetTakeProfit("BTCUSDT", "LONG", 0.01, 51000.123456); err != nil {
 		t.Fatal(err)
 	}
 
@@ -454,6 +462,18 @@ func TestBinanceClosePositionProtectionOmitsQuantity(t *testing.T) {
 		}
 		if request["quantity"] != "" {
 			t.Fatalf("Binance forbids quantity with closePosition=true, got %#v", request)
+		}
+		// Trigger prices must be rounded to the symbol tick size, otherwise the
+		// exchange rejects the order with -4114 and the position gets force-closed.
+		if request["stopPrice"] != "49000.1" && request["stopPrice"] != "51000.1" {
+			t.Fatalf("expected tick-rounded stopPrice, got %#v", request)
+		}
+		// Mark-price triggers with price protection avoid wick-manipulated stops.
+		if request["workingType"] != "MARK_PRICE" {
+			t.Fatalf("expected workingType=MARK_PRICE, got %#v", request)
+		}
+		if request["priceProtect"] != "true" {
+			t.Fatalf("expected priceProtect=true, got %#v", request)
 		}
 	}
 }

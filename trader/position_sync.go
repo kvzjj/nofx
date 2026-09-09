@@ -238,6 +238,17 @@ func (m *PositionSyncManager) reconcilePositionSnapshot(traderID, exchangeID, ex
 		key := fmt.Sprintf("%s_%s", localPos.Symbol, localPos.Side)
 		exchangePos, exists := exchangeMap[key]
 		if !exists {
+			// The exchange position is gone (SL/TP triggered or external
+			// close): cancel any surviving sibling protective orders for this
+			// side immediately instead of waiting for the orphan sweep in a
+			// later cycle. This provides the OCO linkage that independent
+			// conditional orders lack — a stale closePosition order must never
+			// act on a future position on the same side.
+			if canceler, ok := trader.(PositionOrderCanceler); ok {
+				if err := canceler.CancelPositionOrders(localPos.Symbol, localPos.Side); err != nil {
+					logger.Infof("⚠️  Failed to cancel sibling protection orders for %s %s: %v", localPos.Symbol, localPos.Side, err)
+				}
+			}
 			m.closeLocalPosition(localPos, trader, "manual")
 			continue
 		}
@@ -433,6 +444,17 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 		}
 		key := order.Symbol + "_" + positionSide
 		if _, exists := positionKeys[key]; !exists {
+			// A shared exchange account may legitimately hold this position for
+			// another trader; never cancel their protective orders from this
+			// trader's reconciliation cycle.
+			held, heldErr := m.store.Position().HasOpenPositionForExchange(exchangeID, order.Symbol, positionSide)
+			if heldErr != nil {
+				logger.Infof("⚠️  Failed to check shared-account positions for %s: %v", key, heldErr)
+				continue
+			}
+			if held {
+				continue
+			}
 			orphans[key] = order
 			continue
 		}
@@ -559,6 +581,9 @@ func (m *PositionSyncManager) reconcileProtections(traderID, exchangeID string, 
 
 func (m *PositionSyncManager) emergencyCloseUnprotected(traderID, exchangeID string, trader Trader, pos *store.TraderPosition, reason string) {
 	logger.Errorf("CRITICAL: closing unprotected %s %s for trader %s: %s", pos.Symbol, pos.Side, traderID, reason)
+	// Cancel resting entry orders first: an emergency close must not be
+	// reverted by a pending limit entry filling right afterwards.
+	m.cancelPendingEntries(traderID, exchangeID, trader, pos.Symbol, pos.Side)
 	var result map[string]interface{}
 	var err error
 	if pos.Side == "LONG" {
@@ -597,6 +622,32 @@ func (m *PositionSyncManager) emergencyCloseUnprotected(traderID, exchangeID str
 	if canceler, ok := trader.(PositionOrderCanceler); ok {
 		if err := canceler.CancelPositionOrders(pos.Symbol, pos.Side); err != nil {
 			logger.Infof("⚠️  Failed to cancel residual protection orders for %s %s: %v", pos.Symbol, pos.Side, err)
+		}
+	}
+}
+
+// cancelPendingEntries cancels resting local entry orders for one symbol and
+// position side before an emergency close, so the close cannot be silently
+// reverted by a pending limit order filling afterwards.
+func (m *PositionSyncManager) cancelPendingEntries(traderID, exchangeID string, trader Trader, symbol, positionSide string) {
+	canceler, ok := trader.(SingleOrderCanceler)
+	if !ok {
+		return
+	}
+	orders, err := m.store.Execution().ListActiveOrders(traderID, exchangeID)
+	if err != nil {
+		logger.Infof("⚠️  Failed to list pending entry orders for %s %s: %v", symbol, positionSide, err)
+		return
+	}
+	action := "open_" + strings.ToLower(positionSide)
+	for _, order := range orders {
+		if order.Symbol != symbol || order.Action != action || order.OrderID == "" {
+			continue
+		}
+		if err := canceler.CancelOrder(order.Symbol, order.OrderID); err != nil {
+			logger.Infof("⚠️  Failed to cancel pending entry order %s: %v", order.OrderID, err)
+		} else {
+			logger.Infof("📊 Canceled pending entry order %s before emergency close", order.OrderID)
 		}
 	}
 }

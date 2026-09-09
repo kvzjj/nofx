@@ -22,6 +22,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Reorganized documentation structure into logical categories
 - Updated all README files with proper navigation links
 
+### Fixed
+- Round stop-loss/take-profit trigger prices to the symbol tick size; unrounded AI prices were rejected by the exchange (-4114) and escalated into forced closes
+- Switch protective conditional orders to mark-price triggers with price protection to resist wick manipulation and slippage on triggered stops
+- Cancel stale protective orders (e.g. the surviving TP leg after an SL exit) before opening a new position on the same side, preventing "open-then-instantly-closed" races
+- Close decisions now cancel resting limit entries on the same side, so a pending order can no longer silently re-open a just-closed position (emergency closes included)
+- Stop retrying protective orders after deterministic exchange rejections (precision/filters/already-triggered) and fail closed immediately
+- Cancel surviving sibling protective orders in the same reconciliation cycle in which a position disappears, instead of waiting for the orphan sweep
+- Orphan protective-order cleanup no longer cancels orders that belong to a shared exchange position held by another trader on the same account
+
+### Added
+- Configurable pending limit-entry monitoring (`pending_order_timeout_sec`, `pending_order_poll_sec`) with progressive backoff on polling errors, exposed in the strategy risk-control UI
+
 ---
 
 ## [3.0.0] - 2025-10-30

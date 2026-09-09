@@ -879,6 +879,22 @@ func (t *FuturesTrader) CalculatePositionSize(balance, riskPercent, price float6
 	return quantity
 }
 
+// FormatStopPrice rounds a conditional-order trigger price to the symbol's
+// tick size. AI-computed stop prices frequently carry more decimals than the
+// exchange allows; an unrounded price is rejected with -4114 ("Precision is
+// over the maximum"), which used to escalate into a forced close.
+func (t *FuturesTrader) FormatStopPrice(symbol string, price float64) string {
+	precision, tickSize, err := t.GetSymbolPriceFilter(symbol)
+	if err != nil {
+		// Exchange info unavailable; keep the legacy behavior.
+		return fmt.Sprintf("%.8f", price)
+	}
+	if tickSize > 0 {
+		price = math.Round(price/tickSize) * tickSize
+	}
+	return fmt.Sprintf("%.*f", precision, price)
+}
+
 // SetStopLoss sets stop-loss order
 func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error {
 	var side futures.SideType
@@ -897,8 +913,9 @@ func (t *FuturesTrader) SetStopLoss(symbol string, positionSide string, quantity
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeStopMarket).
-		StopPrice(fmt.Sprintf("%.8f", stopPrice)).
-		WorkingType(futures.WorkingTypeContractPrice).
+		StopPrice(t.FormatStopPrice(symbol, stopPrice)).
+		WorkingType(futures.WorkingTypeMarkPrice).
+		PriceProtect(true).
 		ClosePosition(true).
 		NewClientOrderID(getBrOrderID()).
 		Do(context.Background())
@@ -929,8 +946,9 @@ func (t *FuturesTrader) SetTakeProfit(symbol string, positionSide string, quanti
 		Side(side).
 		PositionSide(posSide).
 		Type(futures.OrderTypeTakeProfitMarket).
-		StopPrice(fmt.Sprintf("%.8f", takeProfitPrice)).
-		WorkingType(futures.WorkingTypeContractPrice).
+		StopPrice(t.FormatStopPrice(symbol, takeProfitPrice)).
+		WorkingType(futures.WorkingTypeMarkPrice).
+		PriceProtect(true).
 		ClosePosition(true).
 		NewClientOrderID(getBrOrderID()).
 		Do(context.Background())

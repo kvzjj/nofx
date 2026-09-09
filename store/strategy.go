@@ -182,6 +182,10 @@ type RiskControlConfig struct {
 	ProtectionRetries int `json:"protection_retries,omitempty"`
 	// Delay between protection retries in milliseconds.
 	ProtectionRetryDelayMs int `json:"protection_retry_delay_ms,omitempty"`
+	// How long a resting limit entry order is monitored before it is canceled (seconds).
+	PendingOrderTimeoutSec int `json:"pending_order_timeout_sec,omitempty"`
+	// Polling interval for pending limit entry order status checks (seconds).
+	PendingOrderPollSec int `json:"pending_order_poll_sec,omitempty"`
 	// Action after protection retries are exhausted: "close", "reduce", or "keep_unprotected".
 	ProtectionFailureAction string `json:"protection_failure_action,omitempty"`
 	// Percentage to close when ProtectionFailureAction is "reduce".
@@ -277,6 +281,8 @@ func GetDefaultStrategyConfig(lang string) StrategyConfig {
 			LimitPriceOffsetPct:        0.05,
 			ProtectionRetries:          3,
 			ProtectionRetryDelayMs:     1000,
+			PendingOrderTimeoutSec:     1800,
+			PendingOrderPollSec:        2,
 			ProtectionFailureAction:    "close",
 			ProtectionFailureReducePct: 50,
 		},
@@ -555,6 +561,18 @@ func (config *StrategyConfig) ApplyDefaults() {
 	}
 	if config.RiskControl.ProtectionRetryDelayMs <= 0 {
 		config.RiskControl.ProtectionRetryDelayMs = 1000
+	}
+	if config.RiskControl.PendingOrderTimeoutSec <= 0 {
+		config.RiskControl.PendingOrderTimeoutSec = 1800
+	}
+	if config.RiskControl.PendingOrderTimeoutSec < 60 {
+		config.RiskControl.PendingOrderTimeoutSec = 60
+	}
+	if config.RiskControl.PendingOrderPollSec <= 0 {
+		config.RiskControl.PendingOrderPollSec = 2
+	}
+	if config.RiskControl.PendingOrderPollSec < 1 {
+		config.RiskControl.PendingOrderPollSec = 1
 	}
 	if config.RiskControl.ProtectionFailureAction == "" {
 		config.RiskControl.ProtectionFailureAction = "close"

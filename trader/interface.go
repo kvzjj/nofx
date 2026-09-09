@@ -160,10 +160,13 @@ type Trader interface {
 	// GetMarketPrice Get market price
 	GetMarketPrice(symbol string) (float64, error)
 
-	// SetStopLoss Set stop-loss order
+	// SetStopLoss Set stop-loss order.
+	// Note: implementations using close-position conditional orders (Binance)
+	// ignore quantity and protect the whole position; the parameter is kept
+	// for exchanges that place quantity-scoped protective orders.
 	SetStopLoss(symbol string, positionSide string, quantity, stopPrice float64) error
 
-	// SetTakeProfit Set take-profit order
+	// SetTakeProfit Set take-profit order (same quantity semantics as SetStopLoss)
 	SetTakeProfit(symbol string, positionSide string, quantity, takeProfitPrice float64) error
 
 	// CancelStopLossOrders Cancel only stop-loss orders (BUG fix: don't delete take-profit when adjusting stop-loss)

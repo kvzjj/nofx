@@ -64,6 +64,10 @@ type AutoTraderConfig struct {
 	ProtectionFailureAction    string
 	ProtectionFailureReducePct float64
 
+	// Pending limit entry order monitoring
+	PendingOrderPollInterval time.Duration // Status polling interval
+	PendingOrderTimeout      time.Duration // Monitoring window before the order is canceled
+
 	// Competition visibility
 	ShowInCompetition bool // Whether to show in competition page
 
@@ -219,6 +223,12 @@ func NewAutoTrader(config AutoTraderConfig, st *store.Store, userID string) (*Au
 	}
 	if config.ProtectionFailureReducePct <= 0 || config.ProtectionFailureReducePct > 100 {
 		config.ProtectionFailureReducePct = 50
+	}
+	if config.PendingOrderPollInterval <= 0 {
+		config.PendingOrderPollInterval = 2 * time.Second
+	}
+	if config.PendingOrderTimeout <= 0 {
+		config.PendingOrderTimeout = 30 * time.Minute
 	}
 
 	// Create corresponding trader based on configuration
@@ -1054,6 +1064,14 @@ func (at *AutoTrader) executeOpenLongWithRecord(decision *decision.Decision, act
 		// Continue execution, doesn't affect trading
 	}
 
+	// Cancel protective orders left over from a previous position on this
+	// symbol+side (e.g. the un-triggered TP leg after an SL exit, before the
+	// reconciliation cycle cleans it up). A stale closePosition order would
+	// immediately act on the new position, potentially closing it right away.
+	// Reaching this point implies no exchange position exists for this side,
+	// so any such order is stale by definition.
+	at.cancelPositionOrders(decision.Symbol, "LONG")
+
 	// Open position
 	order, err := at.openLong(decision.Symbol, quantity, decision.Leverage, orderOptions)
 	if err != nil {
@@ -1185,6 +1203,10 @@ func (at *AutoTrader) executeOpenShortWithRecord(decision *decision.Decision, ac
 		// Continue execution, doesn't affect trading
 	}
 
+	// Cancel protective orders left over from a previous position on this
+	// symbol+side before opening (see the long path for rationale).
+	at.cancelPositionOrders(decision.Symbol, "SHORT")
+
 	// Open position
 	order, err := at.openShort(decision.Symbol, quantity, decision.Leverage, orderOptions)
 	if err != nil {
@@ -1251,10 +1273,12 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 	// remaining position's protective orders).
 	var entryPrice float64
 	var quantity float64
+	positionFound := false
 	positions, err := at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
 			if pos["symbol"] == decision.Symbol && pos["side"] == "long" {
+				positionFound = true
 				entryPrice, _ = accountNumber(pos, "entryPrice", "entry_price")
 				if amt, _ := accountNumber(pos, "positionAmt", "size", "quantity"); amt > 0 {
 					quantity = amt
@@ -1264,9 +1288,21 @@ func (at *AutoTrader) executeCloseLongWithRecord(decision *decision.Decision, ac
 		}
 	}
 
+	// Cancel resting entry orders for this side BEFORE closing, so a pending
+	// limit entry cannot re-open the position right after the close fill (the
+	// entry monitor exits cleanly once the exchange reports the order
+	// CANCELED).
+	pendingCanceled := at.cancelPendingEntries(decision.Symbol, "LONG")
+
 	// Close position
 	order, err := at.trader.CloseLong(decision.Symbol, 0) // 0 = close all
 	if err != nil {
+		// No exchange position left (e.g. SL/TP already closed it): the close
+		// intent is satisfied as long as we stopped any pending entry.
+		if !positionFound && pendingCanceled > 0 {
+			logger.Infof("  ✓ No open long on exchange; canceled %d pending long entry order(s) for %s", pendingCanceled, decision.Symbol)
+			return nil
+		}
 		return err
 	}
 
@@ -1309,10 +1345,12 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 	// shorts, so normalize with math.Abs.
 	var entryPrice float64
 	var quantity float64
+	positionFound := false
 	positions, err := at.trader.GetPositions()
 	if err == nil {
 		for _, pos := range positions {
 			if pos["symbol"] == decision.Symbol && pos["side"] == "short" {
+				positionFound = true
 				entryPrice, _ = accountNumber(pos, "entryPrice", "entry_price")
 				if amt, _ := accountNumber(pos, "positionAmt", "size", "quantity"); amt != 0 {
 					quantity = math.Abs(amt)
@@ -1322,9 +1360,19 @@ func (at *AutoTrader) executeCloseShortWithRecord(decision *decision.Decision, a
 		}
 	}
 
+	// Cancel resting entry orders for this side BEFORE closing (see the long
+	// close path for rationale).
+	pendingCanceled := at.cancelPendingEntries(decision.Symbol, "SHORT")
+
 	// Close position
 	order, err := at.trader.CloseShort(decision.Symbol, 0) // 0 = close all
 	if err != nil {
+		// No exchange position left (e.g. SL/TP already closed it): the close
+		// intent is satisfied as long as we stopped any pending entry.
+		if !positionFound && pendingCanceled > 0 {
+			logger.Infof("  ✓ No open short on exchange; canceled %d pending short entry order(s) for %s", pendingCanceled, decision.Symbol)
+			return nil
+		}
 		return err
 	}
 
@@ -2058,6 +2106,33 @@ func (at *AutoTrader) cancelPendingOrder(symbol, orderID string) bool {
 	return true
 }
 
+// cancelPendingEntries cancels resting local entry orders for one symbol and
+// position side. It is used by the close paths so a pending limit entry
+// cannot silently re-open a position that was just closed (the entry
+// monitor exits cleanly once the exchange reports the order CANCELED).
+// It returns the number of orders whose cancellation was accepted.
+func (at *AutoTrader) cancelPendingEntries(symbol, positionSide string) int {
+	if at.store == nil {
+		return 0
+	}
+	action := "open_" + strings.ToLower(positionSide)
+	orders, err := at.store.Execution().ListActiveOrders(at.id, at.exchangeID)
+	if err != nil {
+		logger.Errorf("[%s] failed to list pending entry orders for %s %s: %v", at.name, symbol, positionSide, err)
+		return 0
+	}
+	canceled := 0
+	for _, order := range orders {
+		if order.Symbol != symbol || order.Action != action || order.OrderID == "" {
+			continue
+		}
+		if at.cancelPendingOrder(order.Symbol, order.OrderID) {
+			canceled++
+		}
+	}
+	return canceled
+}
+
 func (at *AutoTrader) resumeEntryOrderSagas() {
 	if at.store == nil {
 		return
@@ -2162,6 +2237,14 @@ func (at *AutoTrader) protectPositionIncrement(symbol, positionSide string, inst
 			at.updateOrderProtection(entryOrderID, cumulativeQuantity, "PROTECTED")
 			return nil
 		}
+		// Validation failures (precision, price filters, already-triggered
+		// stops) are deterministic: resubmitting the identical request can
+		// never succeed and only delays the fail-closed close below.
+		if isDeterministicProtectionRejection(stopErr) || isDeterministicProtectionRejection(takeErr) {
+			logger.Errorf("[%s] protection request for %s %s was deterministically rejected; skipping further retries (stop=%v, take=%v)",
+				at.name, symbol, positionSide, stopErr, takeErr)
+			break
+		}
 		if attempt < retries {
 			logger.Warnf("[%s] protection attempt %d/%d failed for %s %s (stop=%v, take=%v)", at.name, attempt, retries, symbol, positionSide, stopErr, takeErr)
 			time.Sleep(retryDelay)
@@ -2256,15 +2339,16 @@ func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]inter
 	go func() {
 		defer at.monitorWg.Done()
 		logger.Infof("  ⏳ Monitoring pending limit order %s for %s %s", orderID, symbol, action)
-		ticker := time.NewTicker(2 * time.Second)
+		ticker := time.NewTicker(at.config.PendingOrderPollInterval)
 		defer ticker.Stop()
-		timeout := time.NewTimer(30 * time.Minute)
+		timeout := time.NewTimer(at.config.PendingOrderTimeout)
 		defer timeout.Stop()
 
 		partialQty := initialQty
 		partialPrice := initialPrice
 		partialFee := initialFee
 		protectedQty := initialProtectedQty
+		consecutiveErrors := 0
 		processFill := func(state OrderState, executedQty, avgPrice, fee float64) bool {
 			if executedQty <= protectedQty+1e-9 {
 				return true
@@ -2308,7 +2392,9 @@ func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]inter
 		for {
 			select {
 			case <-stopCh:
-				finalizePending("stopped")
+				if !finalizePending("stopped") {
+					logger.Errorf("[%s] pending order %s could not be finalized before stop; it may remain live at the exchange until reconciliation", at.name, orderID)
+				}
 				logger.Infof("  ⏹ Stop monitoring pending order %s because trader stopped", orderID)
 				return
 			case <-timeout.C:
@@ -2320,9 +2406,21 @@ func (at *AutoTrader) monitorPendingEntryOrderState(orderResult map[string]inter
 			case <-ticker.C:
 				status, err := at.trader.GetOrderStatus(symbol, orderID)
 				if err != nil {
-					logger.Infof("  ⚠️ Failed to check pending order %s: %v", orderID, err)
+					// Back off progressively so a rate-limited or unreachable
+					// exchange is not hammered every poll tick.
+					consecutiveErrors++
+					backoff := time.Duration(consecutiveErrors) * at.config.PendingOrderPollInterval
+					if backoff > 30*time.Second {
+						backoff = 30 * time.Second
+					}
+					logger.Infof("  ⚠️ Failed to check pending order %s (%d in a row): %v; backing off %s", orderID, consecutiveErrors, err, backoff)
+					select {
+					case <-stopCh:
+					case <-time.After(backoff):
+					}
 					continue
 				}
+				consecutiveErrors = 0
 
 				statusStr, _ := status["status"].(string)
 				state := normalizeOrderState(statusStr)
@@ -2814,6 +2912,32 @@ func isPendingReconciliation(err error) bool {
 		"was not confirmed filled",
 		"only partially filled",
 		"only filled",
+	}
+	for _, marker := range markers {
+		if strings.Contains(message, marker) {
+			return true
+		}
+	}
+	return false
+}
+
+// isDeterministicProtectionRejection reports whether a protective-order
+// failure is a validation error that resubmitting the identical request can
+// never fix (price precision, exchange filters, or an already-triggered
+// stop). Retrying these only delays the fail-closed close.
+func isDeterministicProtectionRejection(err error) bool {
+	if err == nil {
+		return false
+	}
+	message := strings.ToLower(err.Error())
+	markers := []string{
+		"precision is over the maximum",
+		"would immediately trigger",
+		"filter failure",
+		"price not increased",
+		"reduceonly rejected",
+		"invalid stopprice",
+		"mandatory param",
 	}
 	for _, marker := range markers {
 		if strings.Contains(message, marker) {
