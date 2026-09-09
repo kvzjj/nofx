@@ -433,7 +433,7 @@ services:
 
 ## 🆘 Get Help
 
-- **GitHub Issues**: [Submit an issue](https://github.com/yourusername/open-nofx/issues)
+- **GitHub Issues**: [Submit an issue](https://github.com/kvzjj/auaiex/issues)
 - **Documentation**: Check [README.md](README.md)
 - **Community**: Join our Discord/Telegram group
 

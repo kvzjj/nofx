@@ -83,7 +83,7 @@ git push -f origin <your-pr-branch>
 
 ```bash
 # 如果还没添加 upstream，添加它
-git remote add upstream https://github.com/tinkle-community/nofx.git
+git remote add upstream https://github.com/kvzjj/auaiex.git
 
 # 获取最新更改
 git fetch upstream
@@ -255,7 +255,7 @@ git push -f origin <your-pr-branch>
 **迁移遇到困难？**
 - 在你的 PR 中评论
 - 在 [Telegram](https://t.me/nofx_dev_community) 提问
-- 开启 [Discussion](https://github.com/tinkle-community/nofx/discussions)
+- 开启 [Discussion](https://github.com/kvzjj/auaiex/discussions)
 
 **我们在这里帮助你成功！** 🚀
 

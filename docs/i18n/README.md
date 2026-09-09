@@ -219,7 +219,7 @@ faq.zh-CN.md                 → Chinese FAQ
 
 **Questions? / 有问题？**
 - 💬 Ask in [Telegram Community](https://t.me/nofx_dev_community)
-- 🐙 Open a [GitHub Issue](https://github.com/tinkle-community/nofx/issues)
+- 🐙 Open a [GitHub Issue](https://github.com/kvzjj/auaiex/issues)
 - 📧 Contact maintainers
 
 **Resources / 资源:**

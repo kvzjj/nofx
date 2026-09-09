@@ -432,7 +432,7 @@ services:
 
 ## 🆘 ヘルプを取得
 
-- **GitHub Issues**: [Issueを提出](https://github.com/yourusername/open-nofx/issues)
+- **GitHub Issues**: [Issueを提出](https://github.com/kvzjj/auaiex/issues)
 - **ドキュメント**: [README.md](README.md)を確認
 - **コミュニティ**: Discord/Telegramグループに参加
 

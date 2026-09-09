@@ -554,11 +554,11 @@ cd web && npm run build
 
 **想要贡献？**
 - 阅读[贡献指南](../../CONTRIBUTING.md)
-- 查看[开放问题](https://github.com/tinkle-community/nofx/issues)
+- 查看[开放问题](https://github.com/kvzjj/auaiex/issues)
 - 加入 [Telegram 社区](https://t.me/nofx_dev_community)
 
 **需要澄清？**
-- 开启 [GitHub 讨论](https://github.com/tinkle-community/nofx/discussions)
+- 开启 [GitHub 讨论](https://github.com/kvzjj/auaiex/discussions)
 - 在 Telegram 提问
 
 ---

@@ -37,7 +37,7 @@ Telegram 開発者コミュニティに参加: **[NOFX 開発者コミュニテ�
 ### オプション 1: Docker デプロイ（推奨）
 
 ```bash
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 chmod +x ./start.sh
 ./start.sh start --build
@@ -54,7 +54,7 @@ Web インターフェースにアクセス: **http://localhost:3000**
 brew install ta-lib
 
 # クローンとセットアップ
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 go mod download
 cd web && npm install && cd ..
@@ -94,7 +94,7 @@ cd web && npm run dev
 
 ```bash
 # サーバーにデプロイ
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kvzjj/auaiex/main/install.sh | bash
 ```
 
 `http://YOUR_SERVER_IP:3000` 経由でアクセス - すぐに動作します。
@@ -217,7 +217,7 @@ sudo apt-get install libta-lib0-dev
 
 すべての貢献はGitHubで追跡されます。NOFXが収益を生み出すと、貢献者は貢献に基づいてエアドロップを受け取ります。
 
-**[ピン留めされたIssue](https://github.com/NoFxAiOS/nofx/issues)を解決するPRは最高報酬を受け取ります！**
+**[ピン留めされたIssue](https://github.com/kvzjj/auaiex/issues)を解決するPRは最高報酬を受け取ります！**
 
 | 貢献タイプ | 重み |
 |------------------|:------:|
@@ -240,11 +240,11 @@ sudo apt-get install libta-lib0-dev
 
 ## コンタクト
 
-- **GitHub Issues**: [Issue を提出](https://github.com/NoFxAiOS/nofx/issues)
+- **GitHub Issues**: [Issue を提出](https://github.com/kvzjj/auaiex/issues)
 - **開発者コミュニティ**: [Telegram グループ](https://t.me/nofx_dev_community)
 
 ---
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NoFxAiOS/nofx&type=Date)](https://star-history.com/#NoFxAiOS/nofx&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=kvzjj/auaiex&type=Date)](https://star-history.com/#kvzjj/auaiex&Date)

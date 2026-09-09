@@ -1481,7 +1481,7 @@ Chain of thought analysis
 
 ### Official Resources
 
-- **GitHub Issues**: https://github.com/NoFxAiOS/nofx/issues
+- **GitHub Issues**: https://github.com/kvzjj/auaiex/issues
 - **Official Documentation**: See project README
 - **Community Discussion**: GitHub Discussions
 

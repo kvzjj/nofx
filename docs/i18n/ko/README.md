@@ -37,7 +37,7 @@ Telegram 개발자 커뮤니티 참여: **[NOFX 개발자 커뮤니티](https://
 ### 옵션 1: Docker 배포 (권장)
 
 ```bash
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 chmod +x ./start.sh
 ./start.sh start --build
@@ -54,7 +54,7 @@ chmod +x ./start.sh
 brew install ta-lib
 
 # 클론 및 설정
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 go mod download
 cd web && npm install && cd ..
@@ -94,7 +94,7 @@ cd web && npm run dev
 
 ```bash
 # 서버에 배포
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kvzjj/auaiex/main/install.sh | bash
 ```
 
 `http://YOUR_SERVER_IP:3000`을 통해 액세스 - 즉시 작동합니다.
@@ -217,7 +217,7 @@ sudo apt-get install libta-lib0-dev
 
 모든 기여는 GitHub에서 추적됩니다. NOFX가 수익을 창출하면 기여자는 기여도에 따라 에어드롭을 받게 됩니다.
 
-**[고정된 Issue](https://github.com/NoFxAiOS/nofx/issues)를 해결하는 PR은 최고 보상을 받습니다!**
+**[고정된 Issue](https://github.com/kvzjj/auaiex/issues)를 해결하는 PR은 최고 보상을 받습니다!**
 
 | 기여 유형 | 가중치 |
 |------------------|:------:|
@@ -241,11 +241,11 @@ sudo apt-get install libta-lib0-dev
 
 ## 연락처
 
-- **GitHub Issues**: [Issue 제출](https://github.com/NoFxAiOS/nofx/issues)
+- **GitHub Issues**: [Issue 제출](https://github.com/kvzjj/auaiex/issues)
 - **개발자 커뮤니티**: [Telegram 그룹](https://t.me/nofx_dev_community)
 
 ---
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NoFxAiOS/nofx&type=Date)](https://star-history.com/#NoFxAiOS/nofx&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=kvzjj/auaiex&type=Date)](https://star-history.com/#kvzjj/auaiex&Date)

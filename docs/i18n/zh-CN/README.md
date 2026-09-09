@@ -130,7 +130,7 @@
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kvzjj/auaiex/main/install.sh | bash
 ```
 
 完成！打开浏览器访问 **http://localhost:3000**
@@ -139,7 +139,7 @@ curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bas
 
 ```bash
 # 下载并启动
-curl -O https://raw.githubusercontent.com/NoFxAiOS/nofx/main/docker-compose.prod.yml
+curl -O https://raw.githubusercontent.com/kvzjj/auaiex/main/docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml up -d
 ```
 
@@ -174,7 +174,7 @@ sudo apt-get install libta-lib0-dev
 
 ```bash
 # 1. 克隆仓库
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 
 # 2. 安装后端依赖
@@ -206,7 +206,7 @@ npm run dev
 
 ```bash
 # 部署到你的服务器
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kvzjj/auaiex/main/install.sh | bash
 ```
 
 通过 `http://你的服务器IP:3000` 访问 - 立即可用。
@@ -329,7 +329,7 @@ sudo apt-get install libta-lib0-dev
 
 所有贡献都在 GitHub 上追踪。当 NOFX 产生收入时，贡献者将根据其贡献获得空投。
 
-**解决 [置顶 Issue](https://github.com/NoFxAiOS/nofx/issues) 的 PR 获得最高奖励！**
+**解决 [置顶 Issue](https://github.com/kvzjj/auaiex/issues) 的 PR 获得最高奖励！**
 
 | 贡献类型 | 权重 |
 |------------------|:------:|
@@ -344,11 +344,11 @@ sudo apt-get install libta-lib0-dev
 
 ## 联系方式
 
-- **GitHub Issues**: [提交 Issue](https://github.com/NoFxAiOS/nofx/issues)
+- **GitHub Issues**: [提交 Issue](https://github.com/kvzjj/auaiex/issues)
 - **开发者社区**: [Telegram 群组](https://t.me/nofx_dev_community)
 
 ---
 
 ## Star 历史
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NoFxAiOS/nofx&type=Date)](https://star-history.com/#NoFxAiOS/nofx&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=kvzjj/auaiex&type=Date)](https://star-history.com/#kvzjj/auaiex&Date)

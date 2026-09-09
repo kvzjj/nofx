@@ -37,7 +37,7 @@
 ### Варіант 1: Docker розгортання (рекомендовано)
 
 ```bash
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 chmod +x ./start.sh
 ./start.sh start --build
@@ -54,7 +54,7 @@ chmod +x ./start.sh
 brew install ta-lib
 
 # Клонування та налаштування
-git clone https://github.com/NoFxAiOS/nofx.git
+git clone https://github.com/kvzjj/auaiex.git
 cd nofx
 go mod download
 cd web && npm install && cd ..
@@ -94,5 +94,5 @@ cd web && npm run dev
 
 ## Контакти
 
-- **GitHub Issues**: [Створити Issue](https://github.com/NoFxAiOS/nofx/issues)
+- **GitHub Issues**: [Створити Issue](https://github.com/kvzjj/auaiex/issues)
 - **Спільнота розробників**: [Telegram група](https://t.me/nofx_dev_community)

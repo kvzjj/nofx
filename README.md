@@ -144,7 +144,7 @@ Paper Trading is a built-in simulated exchange: AI traders run the **exact same 
 
 **Linux / macOS:**
 ```bash
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kvzjj/auaiex/main/install.sh | bash
 ```
 
 That's it! Open **http://localhost:3000** in your browser.
@@ -153,7 +153,7 @@ That's it! Open **http://localhost:3000** in your browser.
 
 ```bash
 # Download and start
-curl -O https://raw.githubusercontent.com/NoFxAiOS/nofx/main/docker-compose.prod.yml
+curl -O https://raw.githubusercontent.com/kvzjj/auaiex/main/docker-compose.prod.yml
 docker compose -f docker-compose.prod.yml up -d
 ```
 
@@ -188,8 +188,8 @@ sudo apt-get install libta-lib0-dev
 
 ```bash
 # 1. Clone the repository
-git clone https://github.com/NoFxAiOS/nofx.git
-cd nofx
+git clone https://github.com/kvzjj/auaiex.git
+cd auaiex
 
 # 2. Install backend dependencies
 go mod download
@@ -220,7 +220,7 @@ By default, transport encryption is **disabled**, allowing you to access NOFX vi
 
 ```bash
 # Deploy to your server
-curl -fsSL https://raw.githubusercontent.com/NoFxAiOS/nofx/main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/kvzjj/auaiex/main/install.sh | bash
 ```
 
 Access via `http://YOUR_SERVER_IP:3000` - works immediately.
@@ -343,7 +343,7 @@ We welcome contributions! See:
 
 All contributions are tracked on GitHub. When NOFX generates revenue, contributors will receive airdrops based on their contributions.
 
-**PRs that resolve [Pinned Issues](https://github.com/NoFxAiOS/nofx/issues) receive the HIGHEST rewards!**
+**PRs that resolve [Pinned Issues](https://github.com/kvzjj/auaiex/issues) receive the HIGHEST rewards!**
 
 | Contribution Type | Weight |
 |------------------|:------:|
@@ -358,11 +358,11 @@ All contributions are tracked on GitHub. When NOFX generates revenue, contributo
 
 ## Contact
 
-- **GitHub Issues**: [Submit an Issue](https://github.com/NoFxAiOS/nofx/issues)
+- **GitHub Issues**: [Submit an Issue](https://github.com/kvzjj/auaiex/issues)
 - **Developer Community**: [Telegram Group](https://t.me/nofx_dev_community)
 
 ---
 
 ## Star History
 
-[![Star History Chart](https://api.star-history.com/svg?repos=NoFxAiOS/nofx&type=Date)](https://star-history.com/#NoFxAiOS/nofx&Date)
+[![Star History Chart](https://api.star-history.com/svg?repos=kvzjj/auaiex&type=Date)](https://star-history.com/#kvzjj/auaiex&Date)

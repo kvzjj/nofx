@@ -449,7 +449,7 @@ services:
 
 ## 🆘 获取帮助
 
-- **GitHub Issues**: [提交问题](https://github.com/yourusername/open-nofx/issues)
+- **GitHub Issues**: [提交问题](https://github.com/kvzjj/auaiex/issues)
 - **文档**: 查看 [README.md](README.md)
 - **社区**: 加入我们的 Discord/Telegram 群组
 
